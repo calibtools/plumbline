@@ -5,6 +5,7 @@ import type {
   CalibrationResult,
   ImageDetection,
 } from '../core/types';
+import { calibrateInWorker } from '../core/worker-manager';
 import { en } from '../i18n/en';
 
 interface Props {
@@ -39,13 +40,12 @@ export function CalibrationPanel({
     setIsProcessing(true);
     setProgressMsg(en.calibrating);
 
-    // Allow UI to update
-    await new Promise((r) => requestAnimationFrame(r));
-
     try {
-      const { calibrate } = await import('../core/calibration');
       const imageSize = { width: included[0].width, height: included[0].height };
-      const result = calibrate(detections, boardConfig, flags, imageSize);
+      const result = await calibrateInWorker(
+        detections, boardConfig, flags, imageSize,
+        (msg) => setProgressMsg(msg),
+      );
       onResult(result);
     } catch (err) {
       console.error('Calibration failed:', err);

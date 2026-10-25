@@ -1,7 +1,6 @@
 import type { BoardConfig, DetectedCorner, ImageDetection } from './types';
 
 const MIN_CORNERS = 6;
-const MAX_DETECT_EDGE = 2000;
 
 /**
  * Compute object (3D) points for a CharucoBoard from corner IDs.
@@ -26,7 +25,11 @@ export function cornerIdToObjectPoint(
 
 /**
  * Detect ChArUco corners in a single image.
- * imageData: raw RGBA pixel buffer
+ * Single-pass: runs CharucoDetector.detectBoard directly on the full-resolution
+ * grayscale image. The detector performs internal sub-pixel refinement
+ * (CORNER_REFINE_SUBPIX by default).
+ *
+ * imageData: raw RGBA pixel buffer at original resolution.
  */
 export function detectCharucoCorners(
   imageData: Uint8ClampedArray | Uint8Array,
@@ -37,23 +40,9 @@ export function detectCharucoCorners(
   // Create grayscale Mat from RGBA
   const rgbaMat = new cv.Mat(height, width, cv.CV_8UC4);
   rgbaMat.data.set(imageData);
-  const grayFull = new cv.Mat();
-  cv.cvtColor(rgbaMat, grayFull, cv.COLOR_RGBA2GRAY);
+  const gray = new cv.Mat();
+  cv.cvtColor(rgbaMat, gray, cv.COLOR_RGBA2GRAY);
   rgbaMat.delete();
-
-  // Determine if we need to scale down for detection
-  const maxEdge = Math.max(width, height);
-  const scale = maxEdge > MAX_DETECT_EDGE ? MAX_DETECT_EDGE / maxEdge : 1;
-
-  let grayDetect: cv.Mat;
-  if (scale < 1) {
-    grayDetect = new cv.Mat();
-    const detectW = Math.round(width * scale);
-    const detectH = Math.round(height * scale);
-    cv.resize(grayFull, grayDetect, new cv.Size(detectW, detectH));
-  } else {
-    grayDetect = grayFull.clone();
-  }
 
   // Set up board and detector
   const dict = cv.getPredefinedDictionary(boardConfig.dictionaryId);
@@ -76,39 +65,17 @@ export function detectCharucoCorners(
   const refineParams = new cv.aruco_RefineParameters(10, 3, true);
   const detector = new cv.aruco_CharucoDetector(board, charucoParams, detectorParams, refineParams);
 
-  // First pass: detect at reduced resolution
   const charucoCorners = new cv.Mat();
   const charucoIds = new cv.Mat();
   const markerCorners = new cv.MatVector();
   const markerIds = new cv.Mat();
 
-  detector.detectBoard(grayDetect, charucoCorners, charucoIds, markerCorners, markerIds);
+  detector.detectBoard(gray, charucoCorners, charucoIds, markerCorners, markerIds);
   const markerCount = markerCorners.size();
-  grayDetect.delete();
-
-  let finalCorners: DetectedCorner[];
-
-  if (charucoCorners.rows > 0 && scale < 1) {
-    // Second pass: detect at full resolution for sub-pixel accuracy
-    const fullCorners = new cv.Mat();
-    const fullIds = new cv.Mat();
-    const fullMarkerCorners = new cv.MatVector();
-    const fullMarkerIds = new cv.Mat();
-
-    detector.detectBoard(grayFull, fullCorners, fullIds, fullMarkerCorners, fullMarkerIds);
-
-    finalCorners = extractCorners(fullCorners, fullIds);
-
-    fullCorners.delete();
-    fullIds.delete();
-    fullMarkerCorners.delete();
-    fullMarkerIds.delete();
-  } else {
-    // No scaling needed — coordinates are already at full resolution
-    finalCorners = extractCorners(charucoCorners, charucoIds);
-  }
+  const finalCorners = extractCorners(charucoCorners, charucoIds);
 
   // Cleanup
+  gray.delete();
   charucoCorners.delete();
   charucoIds.delete();
   markerCorners.delete();
@@ -118,7 +85,6 @@ export function detectCharucoCorners(
   detectorParams.delete();
   refineParams.delete();
   board.delete();
-  grayFull.delete();
 
   return { corners: finalCorners, markerCount };
 }

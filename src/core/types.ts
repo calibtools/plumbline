@@ -1,3 +1,6 @@
+/** Core module version — asserted in consistency tests to prove real code is running */
+export const CORE_VERSION = '0.1.0-p1b';
+
 /** Board configuration parameters */
 export interface BoardConfig {
   squaresX: number;
