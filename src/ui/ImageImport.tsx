@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'preact/hooks';
 import type { BoardConfig, ImageDetection } from '../core/types';
+import { detectInWorker } from '../core/worker-manager';
 import { en } from '../i18n/en';
 
 interface Props {
@@ -24,7 +25,6 @@ export function ImageImport({
 
   const processFiles = useCallback(
     async (files: File[]) => {
-      // Filter for supported formats
       const supported = files.filter((f) => {
         const ext = f.name.toLowerCase();
         return ext.endsWith('.jpg') || ext.endsWith('.jpeg') || ext.endsWith('.png');
@@ -47,22 +47,23 @@ export function ImageImport({
       const newDetections: ImageDetection[] = [];
       const thumbnails = new Map<string, string>();
 
-      // Wait for opencv.js to be ready
-      await waitForOpenCV();
-
-      // Process sequentially to manage memory
       for (let i = 0; i < supported.length; i++) {
         const file = supported[i];
         setProgressMsg(`${en.detecting} ${i + 1}/${supported.length}: ${file.name}`);
 
         try {
-          const { imageData, width, height, thumbnailUrl } = await loadImage(file);
-
-          // Create thumbnail
+          const { rgbaBuffer, width, height, thumbnailUrl } = await loadImage(file);
           thumbnails.set(file.name, thumbnailUrl);
 
-          // Run detection in a web worker
-          const detection = await detectInWorker(imageData, width, height, file.name, boardConfig);
+          // Run detection in web worker (rgbaBuffer is transferred, zero-copy)
+          const detection = await detectInWorker(
+            rgbaBuffer,
+            file.name,
+            width,
+            height,
+            boardConfig,
+            (msg) => setProgressMsg(msg),
+          );
           newDetections.push(detection);
         } catch (err) {
           console.error(`Failed to process ${file.name}:`, err);
@@ -100,7 +101,7 @@ export function ImageImport({
       const input = e.target as HTMLInputElement;
       const files = Array.from(input.files || []);
       processFiles(files);
-      input.value = ''; // Reset so same files can be selected again
+      input.value = '';
     },
     [processFiles],
   );
@@ -141,36 +142,29 @@ export function ImageImport({
   );
 }
 
-function waitForOpenCV(): Promise<void> {
-  return new Promise((resolve) => {
-    const check = () => {
-      if (typeof cv !== 'undefined' && typeof cv.Mat === 'function') {
-        resolve();
-      } else {
-        setTimeout(check, 100);
-      }
-    };
-    check();
-  });
-}
-
+/**
+ * Load image file into an ArrayBuffer of RGBA pixels (transferable to worker).
+ * Also produces a small JPEG thumbnail as a data URL.
+ */
 function loadImage(
   file: File,
-): Promise<{ imageData: Uint8ClampedArray; width: number; height: number; thumbnailUrl: string }> {
+): Promise<{ rgbaBuffer: ArrayBuffer; width: number; height: number; thumbnailUrl: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        // Draw to canvas to get pixel data
+        // Full-res canvas for pixel data
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
         const ctx = canvas.getContext('2d')!;
         ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(0, 0, img.width, img.height).data;
+        const imageData = ctx.getImageData(0, 0, img.width, img.height);
+        // .buffer gives us the underlying ArrayBuffer (transferable)
+        const rgbaBuffer = imageData.data.buffer;
 
-        // Create thumbnail
+        // Thumbnail
         const thumbCanvas = document.createElement('canvas');
         const thumbScale = Math.min(1, 300 / Math.max(img.width, img.height));
         thumbCanvas.width = img.width * thumbScale;
@@ -179,12 +173,7 @@ function loadImage(
         thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
         const thumbnailUrl = thumbCanvas.toDataURL('image/jpeg', 0.7);
 
-        resolve({
-          imageData: new Uint8ClampedArray(imageData),
-          width: img.width,
-          height: img.height,
-          thumbnailUrl,
-        });
+        resolve({ rgbaBuffer, width: img.width, height: img.height, thumbnailUrl });
       };
       img.onerror = reject;
       img.src = reader.result as string;
@@ -192,24 +181,4 @@ function loadImage(
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-}
-
-// Run detection synchronously on main thread (worker approach needs opencv.js in worker context)
-// For P1, we detect on main thread with requestAnimationFrame breaks to keep UI responsive
-async function detectInWorker(
-  imageData: Uint8ClampedArray,
-  width: number,
-  height: number,
-  filename: string,
-  boardConfig: BoardConfig,
-): Promise<ImageDetection> {
-  // Allow UI to update
-  await new Promise((r) => requestAnimationFrame(r));
-
-  // Import detection functions dynamically
-  const { detectCharucoCorners, buildDetection } = await import('../core/detection');
-
-  const { corners, markerCount } = detectCharucoCorners(imageData, width, height, boardConfig);
-
-  return buildDetection(filename, width, height, corners, markerCount, boardConfig);
 }

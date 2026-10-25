@@ -14,3 +14,5 @@ fixtures/synthetic-01/reference.json
 # Real fixtures contain user images — not tracked
 fixtures/real-01/*.jpg
 fixtures/real-01/*.png
+# Large synthetic images for timing only — not tracked
+fixtures/synthetic-large/

@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { fileURLToPath } from 'url';
 import { cornerIdToObjectPoint } from '../src/core/detection';
 import { buildHeatmap, getCoverageAdvice, getTiltAdvice } from '../src/core/heatmap';
 import type { BoardConfig, ImageDetection } from '../src/core/types';
@@ -117,5 +120,35 @@ describe('getCoverageAdvice', () => {
     ];
     const advice = getCoverageAdvice(cells, 3, 3);
     expect(advice).toContain('bottom-right');
+  });
+});
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const BOARD_GEOM_DIR = join(__dirname, '..', 'fixtures', 'board-geometry');
+
+describe('cornerIdToObjectPoint vs Python board.getChessboardCorners()', () => {
+  it('matches Python reference for standard (non-legacy) pattern', () => {
+    const ref: number[][] = JSON.parse(readFileSync(join(BOARD_GEOM_DIR, 'standard.json'), 'utf-8'));
+    expect(ref.length).toBe(24); // 4x6 inner corners
+
+    for (let id = 0; id < ref.length; id++) {
+      const pt = cornerIdToObjectPoint(id, BOARD);
+      expect(pt.x, `id=${id} x`).toBeCloseTo(ref[id][0], 6);
+      expect(pt.y, `id=${id} y`).toBeCloseTo(ref[id][1], 6);
+      expect(pt.z, `id=${id} z`).toBeCloseTo(ref[id][2], 6);
+    }
+  });
+
+  it('matches Python reference for legacy pattern', () => {
+    const ref: number[][] = JSON.parse(readFileSync(join(BOARD_GEOM_DIR, 'legacy.json'), 'utf-8'));
+    expect(ref.length).toBe(24);
+
+    const legacyBoard = { ...BOARD, legacyPattern: true };
+    for (let id = 0; id < ref.length; id++) {
+      const pt = cornerIdToObjectPoint(id, legacyBoard);
+      expect(pt.x, `legacy id=${id} x`).toBeCloseTo(ref[id][0], 6);
+      expect(pt.y, `legacy id=${id} y`).toBeCloseTo(ref[id][1], 6);
+      expect(pt.z, `legacy id=${id} z`).toBeCloseTo(ref[id][2], 6);
+    }
   });
 });

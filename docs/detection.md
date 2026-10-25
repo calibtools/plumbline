@@ -1,33 +1,36 @@
 # Detection Pipeline
 
-## Two-Pass Detection
+## Single-Pass Detection
 
-For images larger than 2000 px on the long edge, Plumbline uses a two-pass approach:
+Plumbline runs `CharucoDetector.detectBoard()` once on the **original full-resolution image**. The detector performs internal sub-pixel refinement (`CORNER_REFINE_SUBPIX` is the default `cornerRefinementMethod`).
 
-1. **Pass 1 (reduced resolution)**: The image is downscaled so the long edge is ≤ 2000 px. `CharucoDetector.detectBoard()` runs on this reduced image to quickly find markers and charuco corners. This pass determines *which* corners are present and provides initial rough positions.
+This produces corner coordinates that match Python OpenCV to within 1e-9 px (see `docs/consistency.md`).
 
-2. **Pass 2 (full resolution)**: If any corners were found in pass 1, `CharucoDetector.detectBoard()` runs again on the **original full-resolution image**. The corner coordinates from this pass are used as the final detection result.
+## Why not cornerSubPix?
 
-### Why not `cornerSubPix` on original resolution?
+`cv.cornerSubPix` is not exposed in the official opencv.js 4.9.0 build. Since `CharucoDetector.detectBoard()` already applies sub-pixel refinement internally, a separate `cornerSubPix` call is unnecessary for ChArUco workflows.
 
-The official opencv.js 4.9.0 build does not expose `cv.cornerSubPix`. However, `CharucoDetector` performs internal sub-pixel refinement as part of `detectBoard()` (controlled by `DetectorParameters.cornerRefinementMethod`, which defaults to `CORNER_REFINE_SUBPIX`). Running `detectBoard` at full resolution therefore gives sub-pixel-accurate corner positions without needing a separate `cornerSubPix` call.
+## 12 MP (4000×3000) Detection Timing
 
-This is verified by the consistency tests — corner coordinates match Python OpenCV's output to within 1e-3 px.
+Measured on Apple M-series (headless Chromium, single-file WASM opencv.js 4.9.0):
 
-## Inclusion Criteria
+| Image | Time |
+|-------|-----:|
+| img_00.png | 308 ms |
+| img_01.png | 227 ms |
+| img_02.png | 237 ms |
+| img_03.png | 209 ms |
+| img_04.png | 233 ms |
+| **Average** | **243 ms** |
+| **Max** | **308 ms** |
 
-A detection is **excluded** from calibration if:
-
-- Fewer than 6 charuco corners were detected
-- Fewer than 4 unique corner IDs (degenerate for PnP)
-- All detected corners are collinear (same row or column of the charuco grid)
-- User manually excluded the image
+Detection runs in a Web Worker; the main thread stays responsive (max rAF gap 19.9 ms during 25-image batch).
 
 ## Object Point Computation
 
-The official opencv.js binding for `board.matchImagePoints()` and `board.getChessboardCorners()` is broken (unbound `vector<Point3f>` type). Plumbline computes object points manually:
+`board.matchImagePoints()` and `board.getChessboardCorners()` are broken in opencv.js (unbound `vector<Point3f>` type). Plumbline computes object points manually:
 
-For a board with `squaresX × squaresY` squares, the inner charuco corner grid is `(squaresX-1) × (squaresY-1)`. Corner ID `i` maps to:
+For a board with `squaresX × squaresY` squares, inner corners form a `(squaresX-1) × (squaresY-1)` grid. Corner ID `i`:
 
 ```
 col = i % (squaresX - 1)
@@ -35,10 +38,18 @@ row = floor(i / (squaresX - 1))
 objectPoint = ((col + 1) * squareLength, (row + 1) * squareLength, 0)
 ```
 
-This matches OpenCV's internal layout and is verified by the consistency tests.
+This formula works for both standard and legacy patterns — verified against Python `board.getChessboardCorners()` output for both modes (see `fixtures/board-geometry/`).
+
+## Inclusion Criteria
+
+A detection is excluded from calibration if:
+- Fewer than 6 charuco corners detected
+- Fewer than 4 unique corner IDs (degenerate for PnP)
+- All detected corners are collinear
+- User manually excluded the image
 
 ## Image Format Support
 
 - **JPG/JPEG**: Supported
 - **PNG**: Supported
-- **HEIC/HEIF**: Not supported (browser decoding not universally available). Users are prompted to convert to JPG/PNG.
+- **HEIC/HEIF**: Not supported (prompted to convert)
