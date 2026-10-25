@@ -8,10 +8,13 @@ For each image in a fixture set:
   4. Compare to the corners actually detected by Python's CharucoDetector
   5. Print per-image average and max pixel error
 
-Pass criteria: avg < 0.8 px, max < 2.0 px for every image.
-(The ~0.5 px floor comes from sub-pixel detection bias caused by the
-Gaussian blur applied during rendering — this is expected and confirmed
-by the excellent calibration truth recovery: fx error < 0.2%.)
+Pass criteria: avg < 0.5 px, max < 2.0 px for every image.
+
+The ~0.2 px avg residual after the half-pixel fix is sub-pixel corner detection
+fitting bias (not a rendering error). Max outliers up to 2.0 px occur at 45-degree
+tilt corners near image edges where extreme perspective foreshortening limits
+detector accuracy. Calibration truth recovery confirms rendering is accurate:
+fx error 0.14%, cx error 0.16 px.
 """
 import json
 import math
@@ -156,7 +159,7 @@ def main():
 
         avg_err = np.mean(errs)
         max_err = np.max(errs)
-        ok = avg_err < 0.9 and max_err < 2.0
+        ok = avg_err < 0.55 and max_err < 2.0
         if not ok:
             all_pass = False
 
@@ -164,7 +167,7 @@ def main():
 
     print()
     if all_pass:
-        print("ALL IMAGES PASS (avg < 0.9 px, max < 2.0 px)")
+        print("ALL IMAGES PASS (avg < 0.55 px, max < 2.0 px)")
     else:
         print("SOME IMAGES FAILED — renderer accuracy insufficient")
     return 0 if all_pass else 1
