@@ -42,40 +42,63 @@ export function buildHeatmap(
 }
 
 /**
+ * Aggregate cell counts into a 3×3 region grid (top/middle/bottom × left/center/right).
+ * Returns a Map from region name to total corner count.
+ */
+export function aggregateRegions(
+  cells: HeatmapCell[],
+  gridCols: number,
+  gridRows: number,
+): Map<string, number> {
+  const regions = new Map<string, number>();
+  const names = ['top-left', 'top-center', 'top-right',
+                 'middle-left', 'middle-center', 'middle-right',
+                 'bottom-left', 'bottom-center', 'bottom-right'];
+  for (const n of names) regions.set(n, 0);
+
+  for (const cell of cells) {
+    const vIdx = cell.row < gridRows / 3 ? 0 : cell.row >= (gridRows * 2) / 3 ? 2 : 1;
+    const hIdx = cell.col < gridCols / 3 ? 0 : cell.col >= (gridCols * 2) / 3 ? 2 : 1;
+    const name = names[vIdx * 3 + hIdx];
+    regions.set(name, (regions.get(name) || 0) + cell.count);
+  }
+
+  return regions;
+}
+
+/**
  * Generate coverage advice based on the heatmap.
+ *
+ * Aggregates cell counts into 3×3 regions, then reports regions whose total
+ * is below 20% of the mean region count as "sparse".
  */
 export function getCoverageAdvice(
   cells: HeatmapCell[],
   gridCols: number,
   gridRows: number,
 ): string | null {
-  const maxCount = Math.max(...cells.map((c) => c.count));
-  if (maxCount === 0) return null;
+  const totalCorners = cells.reduce((s, c) => s + c.count, 0);
+  if (totalCorners === 0) return null;
 
-  const threshold = maxCount * 0.1; // cells with < 10% of max are "sparse"
-  const sparseRegions: string[] = [];
+  const regions = aggregateRegions(cells, gridCols, gridRows);
+  const regionCounts = [...regions.values()];
+  const meanRegion = regionCounts.reduce((a, b) => a + b, 0) / regionCounts.length;
+  const threshold = meanRegion * 0.2; // sparse = below 20% of mean
 
-  const regionName = (row: number, col: number): string => {
-    const vName = row < gridRows / 3 ? 'top' : row >= (gridRows * 2) / 3 ? 'bottom' : 'middle';
-    const hName = col < gridCols / 3 ? 'left' : col >= (gridCols * 2) / 3 ? 'right' : 'center';
-    return `${vName}-${hName}`;
-  };
-
-  for (const cell of cells) {
-    if (cell.count <= threshold) {
-      sparseRegions.push(regionName(cell.row, cell.col));
+  const sparse: string[] = [];
+  for (const [name, count] of regions) {
+    if (count < threshold) {
+      sparse.push(name);
     }
   }
 
-  if (sparseRegions.length === 0) return null;
+  if (sparse.length === 0) return null;
 
-  // Deduplicate regions
-  const unique = [...new Set(sparseRegions)];
-  if (unique.length > cells.length * 0.5) {
+  if (sparse.length >= 7) {
     return 'Coverage is sparse overall. Add more images with the board in different positions.';
   }
 
-  return `Sparse coverage in: ${unique.join(', ')}. Place the board in those areas for a few more shots.`;
+  return `Sparse coverage in: ${sparse.join(', ')}. Place the board in those areas for a few more shots.`;
 }
 
 /**

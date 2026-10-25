@@ -61,6 +61,7 @@ export default defineConfig({
       'tests/worker-responsiveness.spec.ts',
       'tests/offline.spec.ts',
       'tests/large-image-timing.spec.ts',
+      'tests/diagnostics.spec.ts',
       'node_modules/**',
     ],
   },

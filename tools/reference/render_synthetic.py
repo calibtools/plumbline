@@ -117,15 +117,29 @@ def _random_pose(rng):
     return rvec, tvec
 
 
+def _board_center_offset():
+    """Return the (x, y, 0) offset to shift board points so the geometric
+    center of the board is at the origin.  This ensures that tx/ty in the
+    translation vector control where the board *center* projects, not the
+    top-left corner."""
+    return np.array([
+        SQUARES_X * SQUARE_LENGTH / 2.0,
+        SQUARES_Y * SQUARE_LENGTH / 2.0,
+        0.0,
+    ], dtype=np.float64)
+
+
 def _four_board_corners_3d(border_mm, board_w_mm, board_h_mm):
     """Return four 3-D points at the corners of the rendered board image
-    (including the white border), in the board coordinate system (mm)."""
+    (including the white border), in the board coordinate system (mm),
+    centered so that the board geometric center is at the origin."""
+    off = _board_center_offset()
     return np.array([
         [-border_mm,              -border_mm,              0],
         [board_w_mm + border_mm,  -border_mm,              0],
         [board_w_mm + border_mm,  board_h_mm + border_mm,  0],
         [-border_mm,              board_h_mm + border_mm,  0],
-    ], dtype=np.float64)
+    ], dtype=np.float64) - off
 
 
 def _render_image(board_img, board, rvec, tvec, rng, border_px):
