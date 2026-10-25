@@ -85,8 +85,10 @@ def render_image_inverse(board_img, board_border_px, rvec, tvec, centered, rng):
     # then intersect with the board plane.
 
     # Generate all pixel coordinates
-    u_coords = np.arange(IMAGE_W, dtype=np.float64)
-    v_coords = np.arange(IMAGE_H, dtype=np.float64)
+    # Output pixel centers: pixel (u,v) has its center at (u+0.5, v+0.5) in
+    # continuous image coordinates. cv2.undistortPoints expects this convention.
+    u_coords = np.arange(IMAGE_W, dtype=np.float64) + 0.5
+    v_coords = np.arange(IMAGE_H, dtype=np.float64) + 0.5
     uu, vv = np.meshgrid(u_coords, v_coords)  # (H, W)
 
     # Stack into (N, 1, 2) for undistortPoints
@@ -142,7 +144,12 @@ def render_image_inverse(board_img, board_border_px, rvec, tvec, centered, rng):
         x_mm = P_board[:, 0]
         y_mm = P_board[:, 1]
 
-    # Map mm → board image pixels
+    # Map mm → board image pixel coordinates (pixel center = integer in cv2.remap)
+    # Board image spans [0, total_w) pixels for x_mm ∈ [-border_mm, BOARD_W_MM + border_mm]
+    # Pixel i covers the range [i, i+1) with center at i.
+    # x_mm = -border_mm should map to the center of pixel 0 → tex = 0
+    # x_mm = -border_mm + 1/PX_PER_MM should map to tex = 1
+    # So: tex = (x_mm + border_mm) * PX_PER_MM  (no -0.5 needed: both sides use center=integer)
     tex_x = (x_mm + border_mm) * BOARD_PX_PER_MM
     tex_y = (y_mm + border_mm) * BOARD_PX_PER_MM
 
