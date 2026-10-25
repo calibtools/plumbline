@@ -171,7 +171,13 @@ describe('Consistency with Python OpenCV', () => {
     };
 
     const imageUrls = reference.images.map(
-      (img) => `http://127.0.0.1:${fixturePort}/fixtures/synthetic-01/${img.filename}`,
+      (img) => {
+        // FIXTURE_DIR may be absolute or relative; make a path relative to PROJECT_ROOT for the URL
+        const relDir = FIXTURE_DIR.startsWith(PROJECT_ROOT)
+          ? FIXTURE_DIR.slice(PROJECT_ROOT.length + 1)
+          : FIXTURE_DIR;
+        return `http://127.0.0.1:${fixturePort}/${relDir}/${img.filename}`;
+      },
     );
 
     const flags = { fixK3: false, fixTangential: false, rationalModel: false, thinPrism: false };
