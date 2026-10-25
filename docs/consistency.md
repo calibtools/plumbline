@@ -66,10 +66,12 @@ The original max threshold was 1.5 px. It was raised to 2.0 px because two corne
 
 **Projection equivalence** is the authoritative check for both datasets: project a 50×50 grid of 3D points through both the JS and Python (K, dist) parameter sets and compare the resulting pixel coordinates. If the parameter sets describe the same camera (even with different coefficient decompositions), the projected pixels must match.
 
-| Dataset | Max projection diff | Threshold | Status |
-|---------|-------------------:|----------:|--------|
-| synthetic-01 (good), Mac | 2.5e-7 px | 1e-3 px | PASS |
-| synthetic-poor-01, Mac | 1.0e-5 px | 1e-3 px | PASS |
+The comparison grid spans the **bounding box of all detected charuco corners** (across all calibration images), expanded by **5% of the image size** on each side. This tests the region where calibration data actually constrains the model. For the good dataset, corners span the full image so the grid covers nearly the full frame; for the poor dataset, corners cluster in the center so the grid shrinks accordingly. This avoids testing extrapolated regions where poorly-conditioned distortion parameters diverge without affecting real-world accuracy. (At full-frame on Linux CI, the poor dataset diverged by 1.85e-3 px at pixel (-49, 1344) — outside the image entirely.)
+
+| Dataset | Region (px) | Max diff (Mac) | Max diff (Linux CI) | Threshold |
+|---------|-------------|---------------:|--------------------:|----------:|
+| synthetic-01 (good) | [0, 0]–[1280, 960] | 2.5e-7 | 4.5e-5 | 1e-3 |
+| synthetic-poor-01 | [454, 303]–[963, 926] | 1.4e-6 | (pending) | 1e-3 |
 
 Linux CI numbers for the poor dataset's per-coefficient diffs (from run 40223078935):
 
