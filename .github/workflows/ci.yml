@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  consistency-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: pip install -r tools/reference/requirements.txt
+
+      - name: Generate synthetic fixtures
+        run: python3 tools/reference/render_synthetic.py
+
+      - name: Run Python reference calibration
+        run: python3 tools/reference/calibrate_reference.py
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Consistency tests
+        run: pnpm test:consistency
+
+  consistency-test-real:
+    runs-on: ubuntu-latest
+    if: hashFiles('fixtures/real-01/*.jpg') != '' || hashFiles('fixtures/real-01/*.png') != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: pip install -r tools/reference/requirements.txt
+
+      - name: Run Python reference on real images
+        run: python3 tools/reference/calibrate_reference.py fixtures/real-01
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Consistency tests (real)
+        run: FIXTURE_DIR=fixtures/real-01 pnpm test:consistency
