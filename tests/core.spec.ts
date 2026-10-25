@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { cornerIdToObjectPoint } from '../src/core/detection';
-import { buildHeatmap, getCoverageAdvice, getTiltAdvice } from '../src/core/heatmap';
+import { buildHeatmap, getCoverageAdvice, getTiltAdvice, aggregateRegions } from '../src/core/heatmap';
 import type { BoardConfig, ImageDetection } from '../src/core/types';
 
 const BOARD: BoardConfig = {
@@ -101,24 +101,49 @@ describe('getTiltAdvice', () => {
 
 describe('getCoverageAdvice', () => {
   it('returns null when coverage is uniform', () => {
-    const cells = [
-      { row: 0, col: 0, count: 10 },
-      { row: 0, col: 1, count: 12 },
-      { row: 1, col: 0, count: 11 },
-      { row: 1, col: 1, count: 9 },
-    ];
-    const advice = getCoverageAdvice(cells, 2, 2);
+    // 6x6 grid, every cell has similar count — all 9 regions well-covered
+    const cells: { row: number; col: number; count: number }[] = [];
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        cells.push({ row: r, col: c, count: 10 + (r + c) });
+      }
+    }
+    const advice = getCoverageAdvice(cells, 6, 6);
     expect(advice).toBeNull();
   });
 
-  it('identifies sparse regions', () => {
-    // Use a 3x3 grid so region names map cleanly
+  it('identifies sparse regions on a 3x3 grid', () => {
     const cells = [
       { row: 0, col: 0, count: 100 }, { row: 0, col: 1, count: 100 }, { row: 0, col: 2, count: 100 },
       { row: 1, col: 0, count: 100 }, { row: 1, col: 1, count: 100 }, { row: 1, col: 2, count: 100 },
       { row: 2, col: 0, count: 100 }, { row: 2, col: 1, count: 100 }, { row: 2, col: 2, count: 0 },
     ];
     const advice = getCoverageAdvice(cells, 3, 3);
+    expect(advice).toContain('bottom-right');
+    expect(advice).not.toContain('middle-center');
+  });
+
+  it('aggregates 8x6 cells into 3x3 regions correctly (does not flag high-count region as sparse)', () => {
+    // 8×6 grid: most regions have decent coverage, but bottom-right is empty.
+    // middle-center has a big peak — must NOT be flagged as sparse.
+    const cells: { row: number; col: number; count: number }[] = [];
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 8; c++) {
+        let count = 20; // baseline everywhere
+        if (r === 3 && c === 4) count = 235; // big peak in middle-center
+        // Zero out bottom-right region (r >= 4, c >= 6 for 8-col grid: 8*2/3=5.33 so c>=6)
+        if (r >= 4 && c >= 6) count = 0;
+        cells.push({ row: r, col: c, count });
+      }
+    }
+
+    const regions = aggregateRegions(cells, 8, 6);
+    expect(regions.get('middle-center')!).toBeGreaterThan(200);
+    expect(regions.get('bottom-right')!).toBeLessThan(regions.get('middle-center')! * 0.1);
+
+    const advice = getCoverageAdvice(cells, 8, 6);
+    expect(advice).not.toBeNull();
+    expect(advice).not.toContain('middle-center');
     expect(advice).toContain('bottom-right');
   });
 });

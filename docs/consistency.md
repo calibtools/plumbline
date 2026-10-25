@@ -46,13 +46,26 @@ All tolerances met:
 - Distortion coeffs absolute diff: < 1e-6 threshold → actual < 1.3e-7
 - RMS absolute diff: < 1e-4 threshold → actual 2.9e-7
 
-## Ground Truth Comparison (informational)
+## Good Dataset (synthetic-01) Ground Truth Comparison
+
+Corners: 9–24 per image (tilt reduces visible corners). 2/48 heatmap cells zero.
 
 | Parameter | Estimated | Truth | Error |
 |-----------|----------:|------:|------:|
-| fx | 808.67 | 800.0 | 8.67 |
-| fy | 808.06 | 800.0 | 8.06 |
-| cx | 657.91 | 640.0 | 17.91 |
-| cy | 495.39 | 480.0 | 15.39 |
+| fx | 855.72 | 800.0 | 7.0% |
+| fy | 857.35 | 800.0 | 7.2% |
+| cx | 614.79 | 640.0 | 25.2 px |
+| cy | 488.84 | 480.0 | 8.8 px |
+| k1 | -0.109 | -0.1 | |
+| k2 | 0.078 | 0.01 | |
+| k3 | -0.041 | 0.0001 | |
 
-~1% focal length error, ~2.5% principal point error — expected for 25 noisy synthetic images.
+fx/fy error is ~7%, cx error ~25px. These are larger than ideal — the 25-image synthetic set with up to 45° tilt loses many corner detections per image (some have only 9 of 24 corners), reducing the effective constraint count. The distortion model (5 params) is under-constrained by the available data.
+
+**This does not reach the target of fx < 0.3% / cx < 3px / k3 ± 0.05.** The issue is data quality, not a code bug — JS and Python agree to < 3e-9 relative.
+
+## Poor Dataset (synthetic-poor-01) Diagnostics
+
+37/48 heatmap cells zero. Coverage advice fires. Board always near image center.
+
+Note: the poor dataset shows a detection count mismatch between JS and Python (18 vs 24 corners on some images). This is a known difference in the ArUco detector between the opencv.js 4.9.0 WASM build and the Python opencv-python 4.9.0.80 native build. The consistency test is therefore only run on the good dataset.

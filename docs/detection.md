@@ -40,6 +40,14 @@ objectPoint = ((col + 1) * squareLength, (row + 1) * squareLength, 0)
 
 This formula works for both standard and legacy patterns — verified against Python `board.getChessboardCorners()` output for both modes (see `fixtures/board-geometry/`).
 
+## Coverage Heatmap Sparse Region Definition
+
+The heatmap divides the image into an N×M grid (default 8×6). For coverage advice, individual cell counts are aggregated into a 3×3 region grid (top/middle/bottom × left/center/right). A region is considered **sparse** if its total corner count is below **20% of the mean region count**.
+
+This prevents the bug where individual zero-cells in a high-count region (e.g., "middle-center" having 235 corners overall but some individual cells at zero) are falsely flagged. The aggregation ensures regions with good overall coverage are not reported as sparse.
+
+If 7+ of 9 regions are sparse, the advice says "coverage is sparse overall" instead of listing individual regions.
+
 ## Inclusion Criteria
 
 A detection is excluded from calibration if:
