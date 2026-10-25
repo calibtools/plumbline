@@ -275,13 +275,15 @@ describe('Consistency with Python OpenCV', () => {
     const projEquiv = await page.evaluate(
       ({ jsFx, jsFy, jsCx, jsCy, jsDist, pyFx, pyFy, pyCx, pyCy, pyDist, imgW, imgH }) => {
         const N = 50;
-        // Build 3D points on z=1 plane spanning the field of view
+        // Build 3D points on z=1 plane spanning the image field of view.
+        // Use 90% of the image area to avoid extrapolation near edges where
+        // poorly-conditioned distortion models diverge.
+        const margin = 0.05; // 5% margin on each side
         const pts3d: number[] = [];
         for (let gi = 0; gi < N; gi++) {
           for (let gj = 0; gj < N; gj++) {
-            // Pixel position → approximate normalized coord (ignoring distortion for grid generation)
-            const u = (gj + 0.5) * imgW / N;
-            const v = (gi + 0.5) * imgH / N;
+            const u = imgW * (margin + (1 - 2 * margin) * (gj + 0.5) / N);
+            const v = imgH * (margin + (1 - 2 * margin) * (gi + 0.5) / N);
             const xn = (u - imgW / 2) / ((jsFx + pyFx) / 2);
             const yn = (v - imgH / 2) / ((jsFy + pyFy) / 2);
             pts3d.push(xn, yn, 1.0);
