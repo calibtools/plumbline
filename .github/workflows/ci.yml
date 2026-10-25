@@ -48,15 +48,15 @@ jobs:
       - name: Generate synthetic fixtures (inverse-mapping renderer)
         run: python3 tools/reference/render_inverse.py
 
-      - name: Verify render accuracy
-        run: |
-          python3 tools/reference/verify_render.py fixtures/synthetic-01
-          python3 tools/reference/verify_render.py fixtures/synthetic-poor-01
-
       - name: Generate reference calibrations
         run: |
           python3 tools/reference/calibrate_reference.py fixtures/synthetic-01
           python3 tools/reference/calibrate_reference.py fixtures/synthetic-poor-01
+
+      - name: Verify render accuracy
+        run: |
+          python3 tools/reference/verify_render.py fixtures/synthetic-01
+          python3 tools/reference/verify_render.py fixtures/synthetic-poor-01
 
       - name: Install Playwright browsers
         run: npx playwright install chromium
