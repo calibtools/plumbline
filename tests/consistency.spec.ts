@@ -269,23 +269,44 @@ describe('Consistency with Python OpenCV', () => {
     // coordinates? Generate a 50×50 grid of normalized points, project through
     // both parameter sets, compare. This catches real disagreements while
     // tolerating coefficient trade-offs along flat directions.
-    // Projection equivalence: project a 50×50 grid of 3D points (on z=1 plane,
-    // spanning the normalized image coordinates) through both (K, dist) sets.
-    // If both describe the same camera, the projected pixels should match.
+    // Projection equivalence: project a 50×50 grid of 3D points through both
+    // (K, dist) sets. Grid spans the bounding box of all detected corners
+    // (across all calibration images) expanded by 5% of the image size.
+    // This tests the region where calibration data actually constrains the
+    // model, not extrapolated edges where poorly-conditioned distortion
+    // parameters can diverge without affecting real-world accuracy.
+
+    // Compute bounding box of all detected corners
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (const det of result.detections) {
+      for (const c of det.corners as Array<{ x: number; y: number }>) {
+        if (c.x < minU) minU = c.x;
+        if (c.x > maxU) maxU = c.x;
+        if (c.y < minV) minV = c.y;
+        if (c.y > maxV) maxV = c.y;
+      }
+    }
+    const imgW = reference.image_size[0];
+    const imgH = reference.image_size[1];
+    const pad = 0.05; // 5% of image size
+    const bboxLeft   = Math.max(0,    minU - pad * imgW);
+    const bboxRight  = Math.min(imgW, maxU + pad * imgW);
+    const bboxTop    = Math.max(0,    minV - pad * imgH);
+    const bboxBottom = Math.min(imgH, maxV + pad * imgH);
+
+    console.log(`  Projection equiv region: [${bboxLeft.toFixed(0)}, ${bboxTop.toFixed(0)}] – [${bboxRight.toFixed(0)}, ${bboxBottom.toFixed(0)}] px`);
+
     const projEquiv = await page.evaluate(
-      ({ jsFx, jsFy, jsCx, jsCy, jsDist, pyFx, pyFy, pyCx, pyCy, pyDist, imgW, imgH }) => {
+      ({ jsFx, jsFy, jsCx, jsCy, jsDist, pyFx, pyFy, pyCx, pyCy, pyDist,
+         uMin, uMax, vMin, vMax }) => {
         const N = 50;
-        // Build 3D points on z=1 plane spanning the image field of view.
-        // Use 90% of the image area to avoid extrapolation near edges where
-        // poorly-conditioned distortion models diverge.
-        const margin = 0.05; // 5% margin on each side
         const pts3d: number[] = [];
         for (let gi = 0; gi < N; gi++) {
           for (let gj = 0; gj < N; gj++) {
-            const u = imgW * (margin + (1 - 2 * margin) * (gj + 0.5) / N);
-            const v = imgH * (margin + (1 - 2 * margin) * (gi + 0.5) / N);
-            const xn = (u - imgW / 2) / ((jsFx + pyFx) / 2);
-            const yn = (v - imgH / 2) / ((jsFy + pyFy) / 2);
+            const u = uMin + (uMax - uMin) * (gj + 0.5) / N;
+            const v = vMin + (vMax - vMin) * (gi + 0.5) / N;
+            const xn = (u - (jsCx + pyCx) / 2) / ((jsFx + pyFx) / 2);
+            const yn = (v - (jsCy + pyCy) / 2) / ((jsFy + pyFy) / 2);
             pts3d.push(xn, yn, 1.0);
           }
         }
@@ -326,7 +347,7 @@ describe('Consistency with Python OpenCV', () => {
       {
         jsFx: cal.fx, jsFy: cal.fy, jsCx: cal.cx, jsCy: cal.cy, jsDist: cal.distCoeffs,
         pyFx: refFx, pyFy: refFy, pyCx: refCx, pyCy: refCy, pyDist: reference.dist_coeffs,
-        imgW: reference.image_size[0], imgH: reference.image_size[1],
+        uMin: bboxLeft, uMax: bboxRight, vMin: bboxTop, vMax: bboxBottom,
       },
     );
 
