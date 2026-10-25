@@ -237,21 +237,25 @@ describe('Consistency with Python OpenCV', () => {
     expect(Math.abs(cal.cy - refCy) / refCy, 'cy relative diff').toBeLessThan(1e-5);
 
     // --- Distortion coefficients ---
+    // Determine if this is the good or poor dataset based on fixture path
+    const isPoorDataset = FIXTURE_DIR.includes('poor');
+
     for (let i = 0; i < Math.min(cal.distCoeffs.length, reference.dist_coeffs.length); i++) {
       const diff = Math.abs(cal.distCoeffs[i] - reference.dist_coeffs[i]);
-      console.log(`  dist[${i}]: JS=${cal.distCoeffs[i].toExponential(6)}, Py=${reference.dist_coeffs[i].toExponential(6)}, diff=${diff.toExponential(3)}`);
-      // Tolerance: max(1e-5, 1e-5 * |reference value|).
-      // This applies a 1e-5 relative tolerance (same standard as camera matrix
-      // params), with a 1e-5 absolute floor.
-      // Rationale: a flat 1e-6 floor was 14x stricter than fx/fy for large
-      // coefficients (e.g. k3 ≈ -1.35 → 1e-6 abs = 7e-7 rel). And for small
-      // coefficients on poorly-conditioned data, cross-platform rendering
-      // differences (images regenerated on each platform) can cause diffs up
-      // to 2e-6, which exceeds 1e-6 even though the relative agreement is
-      // better than 1e-4. The 1e-5 floor keeps the test meaningful while
-      // accommodating platform variance.
-      const distTol = Math.max(1e-5, 1e-5 * Math.abs(reference.dist_coeffs[i]));
-      expect(diff, `dist[${i}] absolute diff (tol=${distTol.toExponential(2)})`).toBeLessThan(distTol);
+      const distTol = Math.max(1e-6, 1e-5 * Math.abs(reference.dist_coeffs[i]));
+      console.log(`  dist[${i}]: JS=${cal.distCoeffs[i].toExponential(6)}, Py=${reference.dist_coeffs[i].toExponential(6)}, diff=${diff.toExponential(3)}, tol=${distTol.toExponential(2)}`);
+
+      if (!isPoorDataset) {
+        // Good dataset: well-conditioned, assert per-coefficient tolerance
+        expect(diff, `dist[${i}] absolute diff (tol=${distTol.toExponential(2)})`).toBeLessThan(distTol);
+      }
+      // Poor dataset: per-coefficient diff is printed but NOT asserted.
+      // Reason: poorly-conditioned data (all corners in image center) creates
+      // a flat cost landscape where k1/k2/k3 trade off freely. Different
+      // platforms' optimizers stop at slightly different points along this
+      // flat direction, causing diffs up to 2e-6 on dist[1] even though the
+      // resulting projection is equivalent. The projection equivalence check
+      // below is the authoritative pass/fail criterion for the poor dataset.
     }
 
     // --- RMS ---
@@ -259,6 +263,76 @@ describe('Consistency with Python OpenCV', () => {
       Math.abs(cal.rms - reference.rms),
       `RMS diff: JS=${cal.rms}, Py=${reference.rms}`,
     ).toBeLessThan(1e-4);
+
+    // --- Projection equivalence check ---
+    // The definitive test: do JS and Python (K, dist) produce the same pixel
+    // coordinates? Generate a 50×50 grid of normalized points, project through
+    // both parameter sets, compare. This catches real disagreements while
+    // tolerating coefficient trade-offs along flat directions.
+    // Projection equivalence: project a 50×50 grid of 3D points (on z=1 plane,
+    // spanning the normalized image coordinates) through both (K, dist) sets.
+    // If both describe the same camera, the projected pixels should match.
+    const projEquiv = await page.evaluate(
+      ({ jsFx, jsFy, jsCx, jsCy, jsDist, pyFx, pyFy, pyCx, pyCy, pyDist, imgW, imgH }) => {
+        const N = 50;
+        // Build 3D points on z=1 plane spanning the field of view
+        const pts3d: number[] = [];
+        for (let gi = 0; gi < N; gi++) {
+          for (let gj = 0; gj < N; gj++) {
+            // Pixel position → approximate normalized coord (ignoring distortion for grid generation)
+            const u = (gj + 0.5) * imgW / N;
+            const v = (gi + 0.5) * imgH / N;
+            const xn = (u - imgW / 2) / ((jsFx + pyFx) / 2);
+            const yn = (v - imgH / 2) / ((jsFy + pyFy) / 2);
+            pts3d.push(xn, yn, 1.0);
+          }
+        }
+
+        const objMat = cv.matFromArray(N * N, 1, cv.CV_64FC3, pts3d);
+        const rvec = cv.matFromArray(3, 1, cv.CV_64FC1, [0, 0, 0]);
+        const tvec = cv.matFromArray(3, 1, cv.CV_64FC1, [0, 0, 0]);
+
+        const jsK = cv.matFromArray(3, 3, cv.CV_64FC1, [jsFx, 0, jsCx, 0, jsFy, jsCy, 0, 0, 1]);
+        const jsDC = cv.matFromArray(1, jsDist.length, cv.CV_64FC1, jsDist);
+        const jsImg = new cv.Mat();
+        cv.projectPoints(objMat, rvec, tvec, jsK, jsDC, jsImg);
+
+        const pyK = cv.matFromArray(3, 3, cv.CV_64FC1, [pyFx, 0, pyCx, 0, pyFy, pyCy, 0, 0, 1]);
+        const pyDC = cv.matFromArray(1, pyDist.length, cv.CV_64FC1, pyDist);
+        const pyImg = new cv.Mat();
+        cv.projectPoints(objMat, rvec, tvec, pyK, pyDC, pyImg);
+
+        let maxDiff = 0;
+        let maxU = 0, maxV = 0;
+        for (let i = 0; i < N * N; i++) {
+          const du = jsImg.doubleAt(i, 0) - pyImg.doubleAt(i, 0);
+          const dv = jsImg.doubleAt(i, 1) - pyImg.doubleAt(i, 1);
+          const d = Math.sqrt(du * du + dv * dv);
+          if (d > maxDiff) {
+            maxDiff = d;
+            maxU = jsImg.doubleAt(i, 0);
+            maxV = jsImg.doubleAt(i, 1);
+          }
+        }
+
+        objMat.delete(); rvec.delete(); tvec.delete();
+        jsK.delete(); jsDC.delete(); jsImg.delete();
+        pyK.delete(); pyDC.delete(); pyImg.delete();
+
+        return { maxDiff, maxU, maxV };
+      },
+      {
+        jsFx: cal.fx, jsFy: cal.fy, jsCx: cal.cx, jsCy: cal.cy, jsDist: cal.distCoeffs,
+        pyFx: refFx, pyFy: refFy, pyCx: refCx, pyCy: refCy, pyDist: reference.dist_coeffs,
+        imgW: reference.image_size[0], imgH: reference.image_size[1],
+      },
+    );
+
+    console.log(`  Projection equivalence: max pixel diff = ${projEquiv.maxDiff.toExponential(3)} px at (${projEquiv.maxU.toFixed(0)}, ${projEquiv.maxV.toFixed(0)})`);
+    expect(
+      projEquiv.maxDiff,
+      `Projection equivalence: max diff ${projEquiv.maxDiff.toExponential(3)} px`,
+    ).toBeLessThan(1e-3);
 
     // --- Ground truth comparison (informational) ---
     if (truth) {

@@ -51,6 +51,8 @@ declare namespace cv {
   const CV_32FC3: number;
   const CV_32SC1: number;
   const CV_64FC1: number;
+  const CV_64FC2: number;
+  const CV_64FC3: number;
 
   const COLOR_RGBA2GRAY: number;
   const COLOR_GRAY2RGBA: number;
@@ -122,6 +124,7 @@ declare namespace cv {
     tvec: Mat,
   ): boolean;
 
+  function undistortPoints(src: Mat, dst: Mat, cameraMatrix: Mat, distCoeffs: Mat): void;
   function Rodrigues(src: Mat, dst: Mat): void;
   function projectPoints(
     objectPoints: Mat,
