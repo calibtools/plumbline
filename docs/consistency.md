@@ -71,7 +71,7 @@ The comparison grid spans the **bounding box of all detected charuco corners** (
 | Dataset | Region (px) | Max diff (Mac) | Max diff (Linux CI) | Threshold |
 |---------|-------------|---------------:|--------------------:|----------:|
 | synthetic-01 (good) | [0, 0]–[1280, 960] | 2.5e-7 | 4.5e-5 | 1e-3 |
-| synthetic-poor-01 | [454, 303]–[963, 926] | 1.4e-6 | (pending) | 1e-3 |
+| synthetic-poor-01 | [454, 303]–[963, 926] | 1.4e-6 | 1.9e-4 | 1e-3 |
 
 Linux CI numbers for the poor dataset's per-coefficient diffs (from run 40223078935):
 
