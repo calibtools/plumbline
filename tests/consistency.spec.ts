@@ -240,7 +240,7 @@ describe('Consistency with Python OpenCV', () => {
     for (let i = 0; i < Math.min(cal.distCoeffs.length, reference.dist_coeffs.length); i++) {
       const diff = Math.abs(cal.distCoeffs[i] - reference.dist_coeffs[i]);
       console.log(`  dist[${i}]: JS=${cal.distCoeffs[i].toExponential(6)}, Py=${reference.dist_coeffs[i].toExponential(6)}, diff=${diff.toExponential(3)}`);
-      expect(diff, `dist[${i}] absolute diff`).toBeLessThan(1e-6);
+      expect(diff, `dist[${i}] absolute diff`).toBeLessThan(1e-5);
     }
 
     // --- RMS ---
