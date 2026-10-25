@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:consistency": "vitest run --config vitest.consistency.config.ts",
+    "test:consistency:all": "vitest run --config vitest.consistency.config.ts && FIXTURE_DIR=fixtures/synthetic-poor-01 vitest run --config vitest.consistency.config.ts tests/consistency.spec.ts",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:worker": "vitest run --config vitest.browser.config.ts tests/worker-responsiveness.spec.ts",
     "test:offline": "vitest run --config vitest.browser.config.ts tests/offline.spec.ts",
