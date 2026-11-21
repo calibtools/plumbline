@@ -13,6 +13,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Corrected view: any image with the lens distortion of the result removed
 - Reprojection error per image, corner coverage map, excluding images and solving again
 - Export: OpenCV YAML and XML, JSON, ROS `camera_info`, Excel workbook, PDF report; choose which files to write
+- Export for using the result: lookup tables that remove the lens distortion (`.npz`) and a short Python example that reads the YAML
 - Boards of a set that continue the marker numbering (first marker ID)
 - Calib.Tools boards by part number: pick one and the pattern settings fill in
 - Project files, built-in sample images

@@ -16,7 +16,7 @@ from . import theme as T
 from .widgets import button, frame, label, rule
 
 RECHECK_CHOICES = (("No reminder", 0), ("In 3 months", 3), ("In 6 months", 6), ("In 12 months", 12), ("In 24 months", 24))
-DEFAULT_FORMATS = {"report", "opencv_yaml", "json", "ros"}  # XML and Excel are offered, off until ticked once
+DEFAULT_FORMATS = {"report", "opencv_yaml", "json", "ros"}  # the others are offered, off until ticked once
 
 KINDS = (
     ("report", "Report, PDF"),
@@ -25,6 +25,8 @@ KINDS = (
     ("json", "JSON, with per-image detail"),
     ("ros", "ROS camera_info"),
     ("xlsx", "Excel, every image and corner"),
+    ("maps", "Lookup tables that remove the distortion"),
+    ("example", "Python example that reads the YAML"),
     ("project", "Plumbline project"),
 )
 
@@ -41,7 +43,7 @@ class ExportDialog(QDialog):
         self._ros = export.ros_distortion_model(result) is not None
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(28, 24, 28, 24)
+        v.setContentsMargins(28, 20, 28, 20)
         v.setSpacing(0)
         v.addWidget(label("EXPORT", "eyebrow"))
         v.addSpacing(6)
@@ -49,12 +51,12 @@ class ExportDialog(QDialog):
         v.addSpacing(4)
         self.revision_note = label("", "muted", wrap=True)
         v.addWidget(self.revision_note)
-        v.addSpacing(20)
+        v.addSpacing(14)
 
         v.addWidget(label("Project name"))
         v.addSpacing(6)
         self.name_edit = QLineEdit(project.name)
-        self.name_edit.setFixedHeight(40)
+        self.name_edit.setFixedHeight(36)
         self.name_edit.setMaxLength(60)
         v.addWidget(self.name_edit)
         v.addSpacing(4)
@@ -66,27 +68,30 @@ class ExportDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
         self.folder_edit = QLineEdit(self._start_folder())
-        self.folder_edit.setFixedHeight(40)
+        self.folder_edit.setFixedHeight(36)
         browse = button("Browse")
-        browse.setFixedHeight(40)
+        browse.setStyleSheet("min-height: 0;")
+        browse.setFixedHeight(36)
         browse.clicked.connect(self._browse)
         row.addWidget(self.folder_edit, 1)
         row.addWidget(browse)
         v.addLayout(row)
-        v.addSpacing(20)
+        v.addSpacing(14)
 
-        v.addWidget(label("Remind me to calibrate this camera again"))
-        v.addSpacing(6)
+        remind = QHBoxLayout()
+        remind.setSpacing(12)
+        remind.addWidget(label("Remind me to calibrate this camera again"), 1)
         self.recheck = QComboBox()
-        self.recheck.setFixedHeight(40)
+        self.recheck.setFixedSize(200, 36)
         for text, months in RECHECK_CHOICES:
             self.recheck.addItem(text, months)
         saved = project.recheck_months if project.revision else int(QSettings().value("recheck_months", 6) or 0)
         self.recheck.setCurrentIndex(max(0, self.recheck.findData(saved)))
-        v.addWidget(self.recheck)
+        remind.addWidget(self.recheck)
+        v.addLayout(remind)
         v.addSpacing(4)
         v.addWidget(label("The reminder appears on the start window of this computer. Nothing is sent anywhere.", "small"))
-        v.addSpacing(20)
+        v.addSpacing(14)
 
         v.addWidget(label("FILES", "eyebrow"))
         v.addSpacing(8)
@@ -102,7 +107,8 @@ class ExportDialog(QDialog):
             {chosen} if isinstance(chosen, str) and chosen else DEFAULT_FORMATS)
         for r, (key, what) in enumerate(KINDS):
             tick = QCheckBox()
-            tick.setFixedWidth(20)
+            tick.setFixedSize(20, 24)
+            tick.setStyleSheet("min-height: 0;")
             if key == "project":  # always written: it is what reopens the session
                 tick.setChecked(True)
                 tick.setEnabled(False)
@@ -123,7 +129,7 @@ class ExportDialog(QDialog):
         v.addSpacing(8)
         self.files_note = label("", "small", wrap=True)
         v.addWidget(self.files_note)
-        v.addSpacing(20)
+        v.addSpacing(14)
         v.addWidget(rule())
         v.addSpacing(16)
 
@@ -190,6 +196,9 @@ class ExportDialog(QDialog):
             self.folder_edit.setText(chosen)
 
     def _update(self, *_):
+        if self._checks["example"].isChecked() and not self._checks["opencv_yaml"].isChecked():
+            self._checks["opencv_yaml"].setChecked(True)  # the example reads this file
+            return
         files = export_files(self.project_name, self._revision)
         folder = Path(self.folder) if self.folder else None
         folder_ok = bool(folder and folder.is_dir())

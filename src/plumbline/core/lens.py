@@ -86,6 +86,27 @@ def solve_pose(obj, corners, K, dist, fisheye: bool = False):
     return np.asarray(rvec, np.float64).reshape(3), np.asarray(tvec, np.float64).reshape(3)
 
 
+def correction_maps(K, dist, size: tuple[int, int], fisheye: bool = False):
+    """Lookup tables that remove the lens distortion: (map_x, map_y, new camera matrix).
+
+    For every pixel of the corrected image, map_x and map_y say where to
+    read in the original image; cv2.remap and most image libraries take
+    them as they are. The corrected image has the size of the original
+    and contains no empty border.
+    """
+    w, h = size
+    K = np.asarray(K, np.float64)
+    dist = np.asarray(dist, np.float64).reshape(-1)
+    if fisheye:
+        D = dist.reshape(4, 1)
+        new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K, D, (w, h), np.eye(3), balance=0.0)
+        map_x, map_y = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), new_K, (w, h), cv2.CV_32FC1)
+    else:
+        new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), 0.0, (w, h))
+        map_x, map_y = cv2.initUndistortRectifyMap(K, dist, None, new_K, (w, h), cv2.CV_32FC1)
+    return np.asarray(map_x, np.float32), np.asarray(map_y, np.float32), np.asarray(new_K, np.float64)
+
+
 def corrected_view(gray: np.ndarray, corners, K, dist, fisheye: bool = False):
     """The image with lens distortion removed, and where the corners land in it.
 
@@ -97,13 +118,12 @@ def corrected_view(gray: np.ndarray, corners, K, dist, fisheye: bool = False):
     K = np.asarray(K, np.float64)
     dist = np.asarray(dist, np.float64).reshape(-1)
     corners = np.asarray(corners, np.float64).reshape(-1, 1, 2)
-    if fisheye:
-        D = dist.reshape(4, 1)
-        new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K, D, (w, h), np.eye(3), balance=0.0)
-        out = cv2.fisheye.undistortImage(gray, K, D, Knew=new_K, new_size=(w, h))
-        moved = cv2.fisheye.undistortPoints(corners, K, D, P=new_K) if len(corners) else corners
+    map_x, map_y, new_K = correction_maps(K, dist, (w, h), fisheye)
+    out = cv2.remap(gray, map_x, map_y, cv2.INTER_LINEAR)
+    if not len(corners):
+        moved = corners
+    elif fisheye:
+        moved = cv2.fisheye.undistortPoints(corners, K, dist.reshape(4, 1), P=new_K)
     else:
-        new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), 0.0, (w, h))
-        out = cv2.undistort(gray, K, dist, None, new_K)
-        moved = cv2.undistortPoints(corners, K, dist, P=new_K) if len(corners) else corners
-    return out, np.asarray(moved, np.float64).reshape(-1, 2), np.asarray(new_K, np.float64)
+        moved = cv2.undistortPoints(corners, K, dist, P=new_K)
+    return out, np.asarray(moved, np.float64).reshape(-1, 2), new_K
