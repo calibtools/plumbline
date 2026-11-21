@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import cv2
 import numpy as np
 
+from . import lens
 from .calibrate import CalibrationResult, suggest_exclusions
 from .detect import Detection
 
@@ -46,15 +46,18 @@ def error_outside_fit(result: CalibrationResult, det: Detection) -> float | None
     if not det.usable:
         return None
     obj = result.target.object_points()[det.ids].astype(np.float64)
-    ok, rvec, tvec = cv2.solvePnP(obj, det.corners.astype(np.float64), result.camera_matrix, result.distortion)
-    if not ok:
+    K, dist, fisheye = result.camera_matrix, result.distortion, result.fisheye
+    pose = lens.solve_pose(obj, det.corners, K, dist, fisheye)
+    if pose is None:
         return None
-    proj, _ = cv2.projectPoints(obj, rvec, tvec, result.camera_matrix, result.distortion)
-    return float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - det.corners) ** 2, axis=1))))
+    proj = lens.project(obj, pose[0], pose[1], K, dist, fisheye)
+    return float(np.sqrt(np.mean(np.sum((proj - det.corners) ** 2, axis=1))))
 
 
 def model_sentence(result: CalibrationResult) -> str:
     o = result.options
+    if o.fisheye:
+        return "OpenCV fisheye model, radial terms k1 to k4."
     parts = ["OpenCV standard model"]
     parts.append("k3 estimated" if o.k3 else "k3 fixed at 0")
     if not o.tangential:

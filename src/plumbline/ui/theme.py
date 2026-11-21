@@ -80,6 +80,7 @@ QPushButton[kind="primary"] {{ background: {RED}; border-color: {RED}; color: #F
 QPushButton[kind="primary"]:hover {{ background: {RED_TEXT}; border-color: {RED_TEXT}; }}
 QPushButton[kind="primary"]:disabled {{ background: {PAPER_ALT}; border-color: {HAIRLINE}; color: {INK_SOFT}; }}
 QPushButton[kind="ink"] {{ border-color: {INK}; }}
+QPushButton:checked {{ background: {INK}; border-color: {INK}; color: #FFFFFF; }}
 QPushButton[kind="big"] {{ min-height: 46px; font-size: 14px; }}
 QPushButton[kind="bigprimary"] {{ min-height: 46px; font-size: 14px; background: {RED}; border-color: {RED}; color: #FFFFFF; }}
 QPushButton[kind="bigprimary"]:hover {{ background: {RED_TEXT}; border-color: {RED_TEXT}; }}

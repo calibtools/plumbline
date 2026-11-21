@@ -152,3 +152,75 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert win.bench.result is not None and first in win.bench.result.excluded
     assert win.bench.project.name == "Sample-ChArUco" and win.bench.project.revision == 2
     win.close()
+
+
+def test_fisheye_lens_from_images_to_export(tmp_path, charuco, fisheye_set):
+    import cv2
+    import yaml
+    from PySide6.QtCore import QSettings, QStandardPaths
+
+    from plumbline.app import MainWindow, create_app
+    from plumbline.core.project import Project
+
+    QStandardPaths.setTestModeEnabled(True)
+    app = create_app([])
+    QSettings().clear()
+    _poses, images, _dets = fisheye_set
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    paths = []
+    for i, img in enumerate(images):
+        paths.append(str(shots / f"wide-{i:02d}.png"))
+        cv2.imwrite(paths[-1], img)
+
+    win = MainWindow()
+    win.show()
+    win.new_project()
+    bench = win.bench
+    bench._fill_fields(charuco)
+    bench._target_changed()
+    assert not bench.view.corrected_btn.isVisible()  # nothing to correct with yet
+
+    # Standard is the starting choice; its extra terms disappear when the fisheye model is picked.
+    assert bench.lens_kind.currentData() is False and not bench.opt_k3.isHidden()
+    bench.lens_kind.setCurrentIndex(1)
+    assert bench.project.options.fisheye and bench.opt_k3.isHidden()
+    assert "fisheye" in bench.model_text.text()
+
+    bench.add_images(paths)
+    _wait(app, win)
+    r = bench.result
+    assert r is not None and r.fisheye and len(r.distortion) == 4
+    assert abs(r.fx - 560) / 560 < 0.005 and r.rms_point < 0.3
+
+    # The corrected view is offered once there is a result, and changes what is drawn.
+    bench.table.selectRow(1)
+    app.processEvents()
+    assert bench.view.corrected_btn.isVisible() and not bench.view.corrected
+    plain = bench.view.grab().toImage()
+    bench.view.corrected_btn.setChecked(True)
+    app.processEvents()
+    assert bench.view.corrected and "corrected" in bench.view._caption
+    assert bench.view.grab().toImage() != plain
+
+    out = tmp_path / "out"
+    out.mkdir()
+    bench.export_to(str(out), formats={"report", "opencv_yaml", "json", "ros", "xlsx"})
+    stem = bench.project.name
+    ros = yaml.safe_load((out / f"{stem}-camera_info.yaml").read_text())
+    assert ros["distortion_model"] == "equidistant"
+    assert (out / f"{stem}-report.pdf").read_bytes().startswith(b"%PDF")
+    assert (out / f"{stem}-data.xlsx").stat().st_size > 1000
+
+    # The model travels with the project file.
+    again = Project.load(str(out / f"{stem}.plumbline"))
+    assert again.options.fisheye
+    win.open_path(str(out / f"{stem}.plumbline"))
+    _wait(app, win)
+    assert win.bench.lens_kind.currentData() is True and win.bench.result.fisheye
+
+    # Going back to the standard model drops the result and takes the switch away.
+    win.bench.lens_kind.setCurrentIndex(0)
+    app.processEvents()
+    assert win.bench.result is None and not win.bench.view.corrected
+    QSettings().setValue("project_counter", 0)

@@ -1,4 +1,4 @@
-"""Single-camera calibration with OpenCV's standard lens model."""
+"""Single-camera calibration with OpenCV's standard or fisheye lens model."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from . import lens
 from .detect import Detection
 from .targets import Target
 
@@ -22,6 +23,7 @@ class ModelOptions:
     rational: bool = False  # k4, k5, k6
     thin_prism: bool = False  # s1..s4
     fix_aspect_ratio: bool = False
+    fisheye: bool = False  # OpenCV fisheye model, k1..k4; the terms above do not apply
 
     def flags(self) -> int:
         flags = 0
@@ -44,11 +46,13 @@ class ModelOptions:
             "rational": self.rational,
             "thin_prism": self.thin_prism,
             "fix_aspect_ratio": self.fix_aspect_ratio,
+            "fisheye": self.fisheye,
         }
 
     @staticmethod
     def from_dict(data: dict) -> "ModelOptions":
-        return ModelOptions(**{k: bool(v) for k, v in data.items()})
+        known = ModelOptions.__dataclass_fields__
+        return ModelOptions(**{k: bool(v) for k, v in data.items() if k in known})
 
 
 @dataclass
@@ -68,7 +72,8 @@ class CalibrationResult:
     image_width: int
     image_height: int
     camera_matrix: np.ndarray  # 3 x 3
-    distortion: np.ndarray  # OpenCV order: k1 k2 p1 p2 k3 [k4 k5 k6 [s1 s2 s3 s4]]
+    # Standard model, OpenCV order: k1 k2 p1 p2 k3 [k4 k5 k6 [s1 s2 s3 s4]]. Fisheye: k1 k2 k3 k4.
+    distortion: np.ndarray
     rms_point: float
     views: list[ViewResult]
     options: ModelOptions
@@ -84,6 +89,14 @@ class CalibrationResult:
         For the same residuals it is the per-point value divided by sqrt(2).
         """
         return self.rms_point / np.sqrt(2.0)
+
+    @property
+    def fisheye(self) -> bool:
+        return self.options.fisheye
+
+    @property
+    def distortion_names(self) -> list[str]:
+        return lens.names(self.fisheye, len(self.distortion))
 
     @property
     def corner_total(self) -> int:
@@ -171,18 +184,29 @@ def calibrate(
         )
 
     try:
-        rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
-            obj_pts, img_pts, size, None, None, flags=options.flags()
-        )
+        if options.fisheye:
+            rms, K, dist, rvecs, tvecs = cv2.fisheye.calibrate(
+                [o.reshape(1, -1, 3).astype(np.float64) for o in obj_pts],
+                [p.reshape(1, -1, 2).astype(np.float64) for p in img_pts],
+                size, np.zeros((3, 3)), np.zeros((4, 1)),
+                flags=cv2.CALIB_RECOMPUTE_EXTRINSIC | cv2.CALIB_FIX_SKEW,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 200, 1e-9),
+            )
+        else:
+            rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+                obj_pts, img_pts, size, None, None, flags=options.flags()
+            )
     except cv2.error as exc:  # pragma: no cover - depends on OpenCV internals
-        raise CalibrationError(f"OpenCV could not solve this set of images: {exc}") from exc
+        hint = (" The fisheye model needs views that reach well into the corners of the image."
+                if options.fisheye else "")
+        raise CalibrationError(f"OpenCV could not solve this set of images.{hint} ({exc})") from exc
 
     dist = _trim_distortion(np.asarray(dist, np.float64).reshape(-1), options)
     views: list[ViewResult] = []
     total_sq, total_n = 0.0, 0
     for i, obj, img, rvec, tvec in zip(used, obj_pts, img_pts, rvecs, tvecs):
-        proj, _ = cv2.projectPoints(obj, rvec, tvec, K, dist)
-        res = (proj.reshape(-1, 2) - img.reshape(-1, 2)).astype(np.float64)
+        proj = lens.project(obj, rvec, tvec, K, dist, options.fisheye)
+        res = proj - img.reshape(-1, 2).astype(np.float64)
         sq = np.sum(res**2, axis=1)
         total_sq += float(sq.sum())
         total_n += len(sq)
@@ -224,9 +248,13 @@ def _trim_distortion(dist: np.ndarray, options: ModelOptions) -> np.ndarray:
     """Cut the coefficient vector to the length the chosen model needs.
 
     OpenCV versions differ in how many trailing zeros they return. The
-    result always has 5, 8 or 12 entries: k1 k2 p1 p2 k3 [k4 k5 k6 [s1 s2 s3 s4]].
+    result always has 5, 8 or 12 entries: k1 k2 p1 p2 k3 [k4 k5 k6 [s1 s2 s3 s4]];
+    the fisheye model has 4.
     """
-    want = 12 if options.thin_prism else 8 if options.rational else 5
+    if options.fisheye:
+        want = 4
+    else:
+        want = 12 if options.thin_prism else 8 if options.rational else 5
     if len(dist) < want:
         dist = np.concatenate([dist, np.zeros(want - len(dist))])
     if np.any(dist[want:] != 0):
@@ -249,7 +277,7 @@ def suggest_exclusions(result: CalibrationResult, factor: float = 2.5) -> list[i
 
 def projection_difference(
     K1: np.ndarray, d1: np.ndarray, K2: np.ndarray, d2: np.ndarray,
-    width: int, height: int, step: int = 40,
+    width: int, height: int, step: int = 40, fisheye: bool = False,
 ) -> tuple[float, float]:
     """Mean and max pixel difference between two models over the image.
 
@@ -259,9 +287,9 @@ def projection_difference(
     """
     xs = np.arange(step / 2, width, step, dtype=np.float64)
     ys = np.arange(step / 2, height, step, dtype=np.float64)
-    px = np.array([(x, y) for y in ys for x in xs], np.float64).reshape(-1, 1, 2)
-    rays = cv2.undistortPoints(px, K1, d1).reshape(-1, 2)
-    pts3 = np.hstack([rays, np.ones((len(rays), 1))])
-    proj, _ = cv2.projectPoints(pts3, np.zeros(3), np.zeros(3), K2, d2)
-    diff = np.linalg.norm(proj.reshape(-1, 2) - px.reshape(-1, 2), axis=1)
+    px = np.array([(x, y) for y in ys for x in xs], np.float64)
+    rays = lens.pixel_directions(px, K1, d1, fisheye)
+    ok = np.isfinite(rays).all(axis=1) & (rays[:, 2] > 1e-6)
+    proj = lens.project(rays[ok], np.zeros(3), np.zeros(3), K2, d2, fisheye)
+    diff = np.linalg.norm(proj - px[ok], axis=1)
     return float(diff.mean()), float(diff.max())

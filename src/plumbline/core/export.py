@@ -9,8 +9,12 @@ import numpy as np
 
 from .. import __version__
 from .calibrate import CalibrationResult
+from .lens import STANDARD_NAMES as DIST_NAMES  # kept under the old name for callers
 
-DIST_NAMES = ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4", "tx", "ty"]
+
+def model_name(result: CalibrationResult) -> str:
+    """Name written into every export so the reader knows which OpenCV functions apply."""
+    return "opencv_fisheye" if result.fisheye else "opencv"
 
 
 def _fmt(value: float) -> str:
@@ -27,12 +31,12 @@ def result_summary(result: CalibrationResult) -> dict:
     return {
         "generator": f"Plumbline {__version__} by Calib.Tools",
         "opencv_version": result.opencv_version,
-        "model": "opencv",
+        "model": model_name(result),
         "image_width": result.image_width,
         "image_height": result.image_height,
         "camera_matrix": result.camera_matrix.tolist(),
         "distortion_coefficients": dist,
-        "distortion_names": DIST_NAMES[: len(dist)],
+        "distortion_names": result.distortion_names,
         "rms_per_point_px": result.rms_point,
         "rms_per_coordinate_px": result.rms_coordinate,
         "rms_note": (
@@ -66,9 +70,13 @@ def opencv_yaml(result: CalibrationResult) -> str:
     """OpenCV FileStorage YAML, readable with cv::FileStorage and cv2.FileStorage."""
     K = result.camera_matrix.reshape(-1)
     d = result.distortion.reshape(-1)
+    note = ("# Fisheye model: use these values with the cv::fisheye functions.\n"
+            if result.fisheye else "")
     return (
         "%YAML:1.0\n---\n"
         f"# Written by Plumbline {__version__} by Calib.Tools, https://calib.tools\n"
+        f"{note}"
+        f'distortion_model: "{model_name(result)}"\n'
         f"image_width: {result.image_width}\n"
         f"image_height: {result.image_height}\n"
         "camera_matrix: !!opencv-matrix\n"
@@ -88,6 +96,8 @@ def write_opencv_yaml(result: CalibrationResult, path: str | Path) -> None:
 def ros_distortion_model(result: CalibrationResult) -> str | None:
     """ROS distortion model name for this result, or None if ROS has none for it."""
     n = len(result.distortion)
+    if result.fisheye:
+        return "equidistant"
     if n == 5:
         return "plumb_bob"
     if n == 8:
@@ -141,6 +151,7 @@ def write_opencv_xml(result: CalibrationResult, path: str | Path) -> None:
     try:
         fs.write("generator", f"Plumbline {__version__} by Calib.Tools, https://calib.tools")
         fs.write("opencv_version", result.opencv_version)
+        fs.write("distortion_model", model_name(result))
         fs.write("image_width", int(result.image_width))
         fs.write("image_height", int(result.image_height))
         fs.write("camera_matrix", np.asarray(result.camera_matrix, np.float64))

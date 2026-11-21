@@ -11,7 +11,6 @@ from openpyxl.utils import get_column_letter
 from .. import __version__
 from .calibrate import CalibrationResult
 from .detect import Detection
-from .export import DIST_NAMES
 from .findings import error_outside_fit, model_sentence
 
 HEAD_FILL = PatternFill("solid", start_color="FBE9EA")
@@ -65,7 +64,7 @@ def write_xlsx(
         ("cx, px", r.cx, "0.0000"),
         ("cy, px", r.cy, "0.0000"),
     ]
-    rows += [(name, float(value), "0.000000000") for name, value in zip(DIST_NAMES, r.distortion)]
+    rows += [(name, float(value), "0.000000000") for name, value in zip(r.distortion_names, r.distortion)]
     rows += [
         ("Software", f"Plumbline {__version__} by Calib.Tools, OpenCV {r.opencv_version}", None),
         ("Website", "https://calib.tools", None),

@@ -62,6 +62,46 @@ def main():
     wait_idle(app, win)
     win.grab().save(str(out / "04-excluded.png"))
     print("AFTER EXCLUDE views", len(bench.result.views), "rms", round(bench.result.rms_point, 4))
+    bench.table.selectRow(1)
+    bench.view.corrected_btn.setChecked(True)
+    pump(app, 0.3)
+    win.grab().save(str(out / "05-corrected.png"))
+    bench.view.corrected_btn.setChecked(False)
+
+    # A wide lens, fitted with the fisheye model.
+    import cv2
+    import numpy as np
+
+    from plumbline.app import SAMPLE_TARGET
+    from plumbline.core import synth
+
+    camera = synth.fisheye_camera()
+    rng = np.random.default_rng(1007)
+    folder = out / "wide-lens-images"
+    folder.mkdir(exist_ok=True)
+    paths = []
+    for i, (r, t) in enumerate(synth.sample_poses(SAMPLE_TARGET, camera, 24)):
+        paths.append(str(folder / f"wide-{i + 1:02d}.png"))
+        cv2.imwrite(paths[-1], synth.render(SAMPLE_TARGET, camera, r, t, rng))
+    win.new_project()
+    bench._fill_fields(SAMPLE_TARGET)
+    bench._target_changed()
+    bench.lens_kind.setCurrentIndex(1)
+    bench.tabs.setCurrentIndex(1)
+    pump(app, 0.2)
+    win.grab().save(str(out / "06-fisheye-model-tab.png"))
+    bench.add_images(paths)
+    wait_idle(app, win)
+    bench.tabs.setCurrentIndex(2)
+    bench.table.selectRow(1)
+    pump(app, 0.3)
+    win.grab().save(str(out / "07-fisheye-result.png"))
+    r = bench.result
+    print("FISHEYE views", len(r.views), "rms", round(r.rms_point, 4), "fx", round(r.fx, 2), "dist", np.round(r.distortion, 5))
+    bench.view.corrected_btn.setChecked(True)
+    pump(app, 0.3)
+    win.grab().save(str(out / "08-fisheye-corrected.png"))
+    bench.export_to(str(out), formats={"report", "opencv_yaml", "ros"})
 
 
 if __name__ == "__main__":
