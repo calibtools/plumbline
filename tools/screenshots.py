@@ -103,6 +103,37 @@ def main():
     win.grab().save(str(out / "08-fisheye-corrected.png"))
     bench.export_to(str(out), formats={"report", "opencv_yaml", "ros"})
 
+    # A stock asymmetric circle grid, picked by part number.
+    from plumbline.core.catalog import find_board
+
+    board = find_board("CT-CIR-P-300X200-ASY").target
+    camera = synth.default_camera()
+    rng = np.random.default_rng(1007)
+    folder = out / "circle-grid-images"
+    folder.mkdir(exist_ok=True)
+    paths = []
+    for i, (r, t) in enumerate(synth.sample_poses(board, camera, 24)):
+        paths.append(str(folder / f"dots-{i + 1:02d}.png"))
+        cv2.imwrite(paths[-1], synth.render(board, camera, r, t, rng))
+    win.new_project()
+    bench.preset.setCurrentIndex(bench.preset.findData("CT-CIR-P-300X200-ASY"))
+    bench.tabs.setCurrentIndex(0)
+    pump(app, 0.2)
+    win.grab().save(str(out / "10-circles-target-tab.png"))
+    bench.add_images(paths)
+    wait_idle(app, win)
+    bench.tabs.setCurrentIndex(2)
+    bench.table.selectRow(next(v.index for v in bench.result.views))
+    pump(app, 0.3)
+    win.grab().save(str(out / "11-circles-result.png"))
+    r = bench.result
+    print("CIRCLES views", len(r.views), "rms", round(r.rms_point, 4), "fx", round(r.fx, 2))
+    assert not bench.view.corrected, "a new project must not open in the corrected view"
+    bench.table.selectRow(next(i for i, d in enumerate(bench.project.detections) if not d.usable))
+    pump(app, 0.3)
+    win.grab().save(str(out / "12-circles-partly-outside.png"))
+    bench.export_to(str(out), formats={"report"})
+
 
 if __name__ == "__main__":
     main()

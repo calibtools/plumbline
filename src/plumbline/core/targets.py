@@ -12,6 +12,11 @@ import numpy as np
 
 CHARUCO = "charuco"
 CHECKERBOARD = "checkerboard"
+CIRCLES = "circles"
+ASYMMETRIC_CIRCLES = "asymmetric_circles"
+KINDS = (CHARUCO, CHECKERBOARD, CIRCLES, ASYMMETRIC_CIRCLES)
+CIRCLE_KINDS = (CIRCLES, ASYMMETRIC_CIRCLES)
+DEFAULT_CIRCLE_RATIO = 0.56  # circle diameter over spacing when the diameter is not given
 
 DICTIONARIES = [
     name
@@ -34,6 +39,13 @@ class Target:
 
     squares_x / squares_y count squares, not inner corners. A 9 x 6
     checkerboard in OpenCV's inner-corner convention is 10 x 7 squares here.
+
+    For circle grids squares_x / squares_y count the positions of a square
+    lattice, square_mm is the lattice spacing and marker_mm the circle
+    diameter (only drawing needs it). A symmetric grid has a circle at every
+    position. An asymmetric grid has one at every other position,
+    checkerboard-wise: a lattice of R rows x C columns holds R rows of C / 2
+    circles, which OpenCV calls pattern size (C / 2, R).
     """
 
     kind: str
@@ -47,8 +59,19 @@ class Target:
     first_marker_id: int = 0  # boards in a set often continue the numbering of the board before
 
     def __post_init__(self) -> None:
-        if self.kind not in (CHARUCO, CHECKERBOARD):
+        if self.kind not in KINDS:
             raise ValueError(f"unknown target kind: {self.kind}")
+        if self.kind in CIRCLE_KINDS:
+            if self.squares_x < 3 or self.squares_y < 3:
+                raise ValueError("a circle grid needs at least 3 x 3 positions")
+            if self.square_mm <= 0:
+                raise ValueError("spacing must be positive")
+            if self.kind == ASYMMETRIC_CIRCLES and (self.squares_x % 2 or self.squares_x < 4):
+                raise ValueError("an asymmetric circle grid needs an even number of columns, at least 4, "
+                                 "so that every row has the same number of circles")
+            if self.marker_mm is not None and not 0 < self.marker_mm < self.square_mm:
+                raise ValueError("circle diameter must be positive and smaller than the spacing")
+            return
         if self.squares_x < 3 or self.squares_y < 3:
             raise ValueError("a target needs at least 3 x 3 squares")
         if self.square_mm <= 0:
@@ -75,8 +98,33 @@ class Target:
         return self.squares_y - 1
 
     @property
+    def is_circles(self) -> bool:
+        return self.kind in CIRCLE_KINDS
+
+    @property
+    def opencv_size(self) -> tuple[int, int]:
+        """The size OpenCV's detector takes: (points per row, rows)."""
+        if self.kind == CIRCLES:
+            return (self.squares_x, self.squares_y)
+        if self.kind == ASYMMETRIC_CIRCLES:
+            return (self.squares_x // 2, self.squares_y)
+        return (self.inner_cols, self.inner_rows)
+
+    @property
     def corner_count(self) -> int:
-        return self.inner_cols * self.inner_rows
+        cols, rows = self.opencv_size
+        return cols * rows
+
+    @property
+    def circle_diameter_mm(self) -> float:
+        if not self.is_circles:
+            raise ValueError("only circle grids have a circle diameter")
+        return float(self.marker_mm) if self.marker_mm else DEFAULT_CIRCLE_RATIO * self.square_mm
+
+    @property
+    def point_word(self) -> str:
+        """What one detected point is called for this pattern."""
+        return "circles" if self.is_circles else "corners"
 
     @property
     def marker_count(self) -> int:
@@ -87,13 +135,47 @@ class Target:
 
     @property
     def width_mm(self) -> float:
+        """Width of the printed pattern, without any margin."""
+        if self.is_circles:
+            return (self.squares_x - 1) * self.square_mm + self.circle_diameter_mm
         return self.squares_x * self.square_mm
 
     @property
     def height_mm(self) -> float:
+        if self.is_circles:
+            return (self.squares_y - 1) * self.square_mm + self.circle_diameter_mm
         return self.squares_y * self.square_mm
 
+    @property
+    def centre_mm(self) -> tuple[float, float]:
+        """Middle of the pattern in the coordinates object_points() uses."""
+        if self.is_circles:
+            return ((self.squares_x - 1) * self.square_mm / 2, (self.squares_y - 1) * self.square_mm / 2)
+        return (self.width_mm / 2, self.height_mm / 2)
+
     def object_points(self) -> np.ndarray:
+        if self.is_circles:
+            return self._circle_points()
+        return self._corner_points()
+
+    def _circle_points(self) -> np.ndarray:
+        """(N, 3) circle centres in the order OpenCV's findCirclesGrid returns them.
+
+        The origin is the centre of the first circle. In an asymmetric grid
+        odd rows are shifted by one lattice step.
+        """
+        cols, rows = self.opencv_size
+        pts = np.zeros((rows * cols, 3), np.float32)
+        for i in range(rows):
+            for j in range(cols):
+                if self.kind == ASYMMETRIC_CIRCLES:
+                    x = (2 * j + i % 2) * self.square_mm
+                else:
+                    x = j * self.square_mm
+                pts[i * cols + j] = (x, i * self.square_mm, 0)
+        return pts
+
+    def _corner_points(self) -> np.ndarray:
         """(N, 3) float32 inner-corner positions, row by row, z = 0.
 
         Corner id i sits at row i // inner_cols, column i % inner_cols.
@@ -132,6 +214,10 @@ class Target:
             return self.part_number
         if self.kind == CHARUCO:
             return f"ChArUco {self.squares_x} x {self.squares_y}"
+        if self.kind == CIRCLES:
+            return f"Circles {self.squares_x} x {self.squares_y}"
+        if self.kind == ASYMMETRIC_CIRCLES:
+            return f"Asym. circles {self.squares_x // 2} x {self.squares_y}"
         return f"Checkerboard {self.inner_cols} x {self.inner_rows}"
 
     def describe(self) -> str:
@@ -148,6 +234,11 @@ class Target:
             if self.first_marker_id:
                 text += f", IDs from {self.first_marker_id}"
             return text
+        if self.kind == CIRCLES:
+            return f"Circle grid {self.squares_x} x {self.squares_y}, {self.square_mm:g} mm spacing"
+        if self.kind == ASYMMETRIC_CIRCLES:
+            return (f"Asymmetric circle grid, {self.squares_y} rows of {self.squares_x // 2}, "
+                    f"{self.square_mm:g} mm lattice spacing")
         return (
             f"Checkerboard {self.inner_cols} x {self.inner_rows} inner corners, "
             f"{self.square_mm:g} mm"

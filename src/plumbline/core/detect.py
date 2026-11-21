@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .targets import CHARUCO, Target
+from .targets import ASYMMETRIC_CIRCLES, CHARUCO, Target
 
 # A view needs enough corners to constrain its pose well.
 MIN_CORNERS = 8
@@ -71,12 +71,14 @@ def detect(gray: np.ndarray, target: Target, path: str = "") -> Detection:
     det = Detection(path=path, width=w, height=h)
     if target.kind == CHARUCO:
         _detect_charuco(gray, target, det)
+    elif target.is_circles:
+        _detect_circles(gray, target, det)
     else:
         _detect_checkerboard(gray, target, det)
     if det.count == 0:
         det.note = det.note or "No target found"
     elif not det.usable:
-        det.note = f"Only {det.count} corners found, at least {MIN_CORNERS} are needed"
+        det.note = f"Only {det.count} {target.point_word} found, at least {MIN_CORNERS} are needed"
     return det
 
 
@@ -123,3 +125,26 @@ def _detect_checkerboard(gray: np.ndarray, target: Target, det: Detection) -> No
         return
     det.ids = np.arange(target.corner_count, dtype=np.int32)
     det.corners = corners
+
+
+def _detect_circles(gray: np.ndarray, target: Target, det: Detection) -> None:
+    """Dark circles on a light board. The whole grid has to be in view."""
+    h, w = gray.shape[:2]
+    params = cv2.SimpleBlobDetector_Params()
+    params.minArea = 12.0
+    params.maxArea = max(5000.0, w * h / 40.0)  # the default upper limit rejects circles in large images
+    params.minDistBetweenBlobs = 2.0
+    blobs = cv2.SimpleBlobDetector_create(params)
+    flag = cv2.CALIB_CB_ASYMMETRIC_GRID if target.kind == ASYMMETRIC_CIRCLES else cv2.CALIB_CB_SYMMETRIC_GRID
+    found, centres = cv2.findCirclesGrid(gray, target.opencv_size, flags=flag, blobDetector=blobs)
+    if not found or centres is None:
+        seen = len(blobs.detect(gray))
+        if seen:
+            det.note = (f"{seen} dark spots found but no complete grid of {target.corner_count} circles. "
+                        "The whole grid must be in the image; check the row and column counts.")
+        return
+    centres = np.asarray(centres, np.float32).reshape(-1, 2)
+    if len(centres) != target.corner_count:
+        return
+    det.ids = np.arange(target.corner_count, dtype=np.int32)
+    det.corners = centres

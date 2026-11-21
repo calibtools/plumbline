@@ -17,11 +17,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from plumbline.core.targets import CHARUCO, CHECKERBOARD, Target  # noqa: E402
+from plumbline.core.targets import ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, Target  # noqa: E402
+
+KIND = {"ChArUco": CHARUCO, "Checkerboard": CHECKERBOARD,
+        "Symmetric circles": CIRCLES, "Asymmetric circles": ASYMMETRIC_CIRCLES}
 
 DUMP = """
 import { CATALOG } from '%s/src/lib/catalogPatterns';
-const keep = CATALOG.filter(e => e.spec.type === 'ChArUco' || e.spec.type === 'Checkerboard');
+const types = %s;
+const keep = CATALOG.filter(e => types.includes(e.spec.type));
 console.log(JSON.stringify(keep.map(e => ({ pn: e.partNumber, handle: e.handle, ...e.spec }))));
 """
 
@@ -31,7 +35,7 @@ def main() -> int:
     sha = subprocess.run(["git", "-C", str(site), "rev-parse", "--short", "HEAD"],
                          capture_output=True, text=True, check=True).stdout.strip()
     with tempfile.NamedTemporaryFile("w", suffix=".ts", delete=False) as fh:
-        fh.write(DUMP % site)
+        fh.write(DUMP % (site, json.dumps(sorted(KIND))))
     rows = json.loads(subprocess.run(["tsx", fh.name], capture_output=True, text=True, check=True).stdout)
 
     boards, dropped = [], []
@@ -40,13 +44,20 @@ def main() -> int:
         entry = {
             "part_number": r["pn"],
             "product": r["handle"],
-            "kind": CHARUCO if r["type"] == "ChArUco" else CHECKERBOARD,
+            "kind": KIND[r["type"]],
             "squares_x": r["cols"],
             "squares_y": r["rows"],
             "square_mm": r["square"],
         }
         if entry["kind"] == CHARUCO:
             entry.update(marker_mm=r["marker"], dictionary=r["dict"], first_marker_id=r.get("startId", 0))
+        elif entry["kind"] in (CIRCLES, ASYMMETRIC_CIRCLES):
+            # The site walks a square lattice of rows x cols with spacing `square`; so does Target.
+            if r.get("circleSpacingX") or r.get("circleSpacingY"):
+                dropped.append((r["pn"], "unequal spacing across and down is not supported"))
+                continue
+            if r.get("circleDiameter"):
+                entry.update(marker_mm=r["circleDiameter"])
         try:  # the same checks the app applies; a board the dictionary cannot hold is left out
             Target(**{k: v for k, v in entry.items() if k != "product"})
         except ValueError as exc:

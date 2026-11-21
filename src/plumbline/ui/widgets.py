@@ -233,7 +233,7 @@ class CoverageMap(QWidget):
             p.setPen(QPen(QColor(T.HAIRLINE), 1))
             p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
             p.setPen(QColor(T.INK_SOFT))
-            p.drawText(area, Qt.AlignmentFlag.AlignCenter, "No corners yet")
+            p.drawText(area, Qt.AlignmentFlag.AlignCenter, "Nothing detected yet")
             return
         rows, cols = self._grid.shape
         cw, ch = area.width() / cols, area.height() / rows
@@ -253,7 +253,7 @@ class CoverageMap(QWidget):
                 p.drawRect(cell)
         p.setPen(QColor(T.INK_MUTED))
         p.drawText(QRectF(0, 154, 244, 16), Qt.AlignmentFlag.AlignLeft,
-                   f"{self._share * 100:.0f} % of the image has corners")
+                   f"{self._share * 100:.0f} % of the image is covered")
 
 
 RESIDUAL_GAIN = 30  # residual vectors are drawn this many times longer than they are

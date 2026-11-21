@@ -24,7 +24,7 @@ from ..core.naming import export_files, result_signature, safe_name
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
-from ..core.targets import CHARUCO, CHECKERBOARD, DICTIONARIES, Target
+from ..core.targets import ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, Target
 from . import theme as T
 from .export_dialog import ExportDialog
 from .report import write_report
@@ -228,7 +228,7 @@ class Workbench(QWidget):
         b.addLayout(left, 1)
         right = QVBoxLayout()
         right.setSpacing(6)
-        right.addWidget(label("CORNER COVERAGE", "eyebrow"))
+        right.addWidget(label("COVERAGE", "eyebrow"))
         self.coverage = CoverageMap()
         right.addWidget(self.coverage)
         right.addStretch(1)
@@ -273,6 +273,8 @@ class Workbench(QWidget):
         self.kind = QComboBox()
         self.kind.addItem("ChArUco", CHARUCO)
         self.kind.addItem("Checkerboard", CHECKERBOARD)
+        self.kind.addItem("Circle grid", CIRCLES)
+        self.kind.addItem("Asymmetric circles", ASYMMETRIC_CIRCLES)
         self.sx, self.sy = QSpinBox(), QSpinBox()
         for s, val in ((self.sx, 11), (self.sy, 8)):
             s.setRange(3, 200)
@@ -299,9 +301,10 @@ class Workbench(QWidget):
         for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
             wdg.lineEdit().setTextMargins(7, 0, 0, 0)  # line the text up with the combo boxes
         form.addRow(label("Pattern"), self.kind)
-        form.addRow(label("Squares across"), self.sx)
-        form.addRow(label("Squares down"), self.sy)
-        form.addRow(label("Square size"), self.square)
+        self.sx_label, self.sy_label, self.square_label = label(""), label(""), label("")
+        form.addRow(self.sx_label, self.sx)
+        form.addRow(self.sy_label, self.sy)
+        form.addRow(self.square_label, self.square)
         form.addRow(self.marker_label, self.marker)
         form.addRow(self.dict_label, self.dictionary)
         form.addRow(self.first_id_label, self.first_id)
@@ -311,8 +314,8 @@ class Workbench(QWidget):
         v.addWidget(self.target_hint)
         v.addStretch(1)
         v.addWidget(rule())
-        v.addWidget(label("For any other board: count squares, not inner corners, and measure one square.",
-                          "small", wrap=True))
+        self.target_note = label("", "small", wrap=True)
+        v.addWidget(self.target_note)
         for wdg in (self.kind, self.dictionary):
             wdg.currentIndexChanged.connect(self._target_changed)
         for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
@@ -442,7 +445,7 @@ class Workbench(QWidget):
         fields = (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id)
         for wdg in fields:
             wdg.blockSignals(True)
-        self.kind.setCurrentIndex(0 if t.kind == CHARUCO else 1)
+        self.kind.setCurrentIndex(max(0, self.kind.findData(t.kind)))
         self.sx.setValue(t.squares_x)
         self.sy.setValue(t.squares_y)
         self.square.setValue(t.square_mm)
@@ -462,7 +465,7 @@ class Workbench(QWidget):
                                 self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked(),
                                 first_marker_id=self.first_id.value())
             else:
-                target = Target(CHECKERBOARD, self.sx.value(), self.sy.value(), self.square.value())
+                target = Target(kind, self.sx.value(), self.sy.value(), self.square.value())
             # The part number stays only while the fields still describe that board.
             board = find_board(self.preset.currentData())
             if board is not None and same_geometry(board.target, target):
@@ -481,7 +484,21 @@ class Workbench(QWidget):
         )
 
     def _target_changed(self, *_):
-        charuco = self.kind.currentData() == CHARUCO
+        kind = self.kind.currentData()
+        charuco = kind == CHARUCO
+        if kind == CIRCLES:
+            names = ("Circles across", "Circles down", "Spacing")
+            note = "For any other board: count the circles, and measure from the centre of one to the centre of the next."
+        elif kind == ASYMMETRIC_CIRCLES:
+            names = ("Columns", "Rows", "Lattice spacing")
+            note = ("Columns and rows count the positions of the square lattice the circles sit on; "
+                    "every other position holds a circle. The whole grid must be in every image.")
+        else:
+            names = ("Squares across", "Squares down", "Square size")
+            note = "For any other board: count squares, not inner corners, and measure one square."
+        for wdg, text in zip((self.sx_label, self.sy_label, self.square_label), names):
+            wdg.setText(text)
+        self.target_note.setText(note)
         for wdg in (self.marker, self.dictionary, self.legacy, self.marker_label, self.dict_label,
                     self.first_id, self.first_id_label):
             wdg.setVisible(charuco)
@@ -499,12 +516,20 @@ class Workbench(QWidget):
             self.preset_link.set_url(T.site_url("/targets/", "target-custom"))
         if target is not None:
             self.target_hint.setStyleSheet("")
-            self.target_hint.setText(
-                f"{target.inner_cols} x {target.inner_rows} inner corners, "
-                f"pattern {target.width_mm:g} x {target.height_mm:g} mm"
-                + (f", marker IDs {target.first_marker_id} to "
-                   f"{target.first_marker_id + target.marker_count - 1}." if target.kind == CHARUCO else ".")
-            )
+            if target.is_circles:
+                cols, rows = target.opencv_size
+                self.target_hint.setText(
+                    f"{target.corner_count} circles, {rows} rows of {cols}. "
+                    f"OpenCV pattern size {cols} x {rows}."
+                )
+            else:
+                self.target_hint.setText(
+                    f"{target.inner_cols} x {target.inner_rows} inner corners, "
+                    f"pattern {target.width_mm:g} x {target.height_mm:g} mm"
+                    + (f", marker IDs {target.first_marker_id} to "
+                       f"{target.first_marker_id + target.marker_count - 1}." if target.kind == CHARUCO else ".")
+                )
+            self.table.setHorizontalHeaderLabels(["File", target.point_word.capitalize(), "Error, px"])
         if target != self.project.target:
             self.project.target = target
             had = any(d.count for d in self.project.detections)
@@ -526,6 +551,7 @@ class Workbench(QWidget):
     def load_project(self, project: Project) -> None:
         self.project = project
         self.result = None
+        self.view.corrected_btn.setChecked(False)  # every project opens on the images as they were taken
         t = project.target
         if t is not None:
             self._fill_fields(t)
@@ -603,7 +629,7 @@ class Workbench(QWidget):
             if good:
                 self.run_calibration()
 
-        self._start(job, done, "Detecting corners")
+        self._start(job, done, "Detecting the target")
 
     def run_calibration(self):
         target = self.project.target
@@ -733,15 +759,16 @@ class Workbench(QWidget):
         det = dets[row] if row < len(dets) else None
         view = self._view_for(row)
         name = Path(paths[row]).name
+        word = self.project.target.point_word if self.project.target else "corners"
         if det is None:
             caption = f"{name} · not checked yet"
         elif det.count == 0 or not det.usable:
             caption = f"{name} · {det.note}"
         elif view is not None:
-            caption = (f"{name} · {det.width} × {det.height} · {det.count} corners · "
+            caption = (f"{name} · {det.width} × {det.height} · {det.count} {word} · "
                        f"{view.rms_point:.3f} px · residuals ×{RESIDUAL_GAIN}")
         else:
-            caption = f"{name} · {det.width} × {det.height} · {det.count} corners"
+            caption = f"{name} · {det.width} × {det.height} · {det.count} {word}"
         corners = det.corners if det is not None else np.zeros((0, 2))
         gray = read_gray(paths[row])
         residuals = view.residuals if view else None
@@ -750,7 +777,7 @@ class Workbench(QWidget):
         if gray is not None and r is not None and self.view.corrected:
             gray, corners, _ = lens.corrected_view(gray, corners, r.camera_matrix, r.distortion, r.fisheye)
             residuals = None
-            caption = f"{name} · corrected view · lens distortion removed with this result"
+            caption = caption.replace(f" · residuals ×{RESIDUAL_GAIN}", "") + " · corrected view"
         self.view.set_image(gray, corners, residuals, caption)
         self._update_toggle()
         self._refresh_chart()
@@ -835,7 +862,7 @@ class Workbench(QWidget):
             ("done" if t else "next", t.short_label if t else "Check the settings"),
             ("done" if n else "next" if t else "off", f"{n} loaded" if n else "Add images"),
             ("done" if dets else "next" if n and t else "off",
-             f"{good} good · {len(dets) - good} to check" if dets else "Find the corners"),
+             f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
             ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
             ("next" if r else "off", "Parameters and report"),
         ]
@@ -858,7 +885,7 @@ class Workbench(QWidget):
             f"the same result reads {r.rms_coordinate:.3f} px."
         )
         self.used_note.setText(
-            f"{len(r.views)} of {n} images, {r.corner_total:,} corners · "
+            f"{len(r.views)} of {n} images, {r.corner_total:,} {r.target.point_word} · "
             f"{len(r.excluded)} excluded · {len(r.skipped)} without a usable detection"
         )
         for k, val in zip(("fx", "fy", "cx", "cy"), (r.fx, r.fy, r.cx, r.cy)):
