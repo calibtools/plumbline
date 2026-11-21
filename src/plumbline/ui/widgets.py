@@ -10,8 +10,8 @@ from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QSizePolicy, QWidget
 from . import theme as T
 
 
-def open_site(path: str = "") -> None:
-    QDesktopServices.openUrl(QUrl(T.SITE + path))
+def open_site(path: str = "", where: str = "app") -> None:
+    QDesktopServices.openUrl(QUrl(T.site_url(path, where)))
 
 
 class SvgMark(QWidget):
@@ -33,7 +33,7 @@ class SvgMark(QWidget):
 
     def mouseReleaseEvent(self, _e):
         if self._clickable:
-            open_site()
+            open_site(where="logo")
 
 
 def label(text: str = "", role: str | None = None, font=None, wrap: bool = False, color: str | None = None) -> QLabel:
@@ -58,10 +58,13 @@ class LinkLabel(QLabel):
 
     def __init__(self, text: str, url: str = T.SITE, role: str = "link", parent=None):
         super().__init__(text, parent)
-        self._url = url
+        self.set_url(url)
         self.setProperty("role", role)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(url)
+
+    def set_url(self, url: str) -> None:
+        self._url = url
+        self.setToolTip(url.split("?")[0])
 
     def mouseReleaseEvent(self, _e):
         QDesktopServices.openUrl(QUrl(self._url))

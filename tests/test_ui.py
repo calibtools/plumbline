@@ -126,6 +126,19 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert welcome_module.question_mailto().startswith("mailto:hello@calib.tools?subject=Plumbline%20question")
     win.stack.setCurrentWidget(bench)
 
+    # Picking a part number fills the pattern in; editing a field afterwards drops the part number.
+    win.new_project()
+    fresh = win.bench
+    fresh.preset.setCurrentIndex(fresh.preset.findData("CT-CHA-P-400X300-D5"))
+    assert fresh.project.target.part_number == "CT-CHA-P-400X300-D5"
+    assert (fresh.sx.value(), fresh.sy.value(), fresh.square.value(), fresh.marker.value()) == (12, 9, 30.0, 22.0)
+    assert fresh.dictionary.currentText() == "DICT_5X5_100"
+    assert "CT-CHA-P-400X300-D5" in fresh.preset_link.text()
+    assert fresh.steps[0]._status.text() == "CT-CHA-P-400X300-D5"
+    fresh.square.setValue(31.0)
+    assert fresh.project.target.part_number is None and fresh.preset.currentIndex() == 0
+    QSettings().setValue("project_counter", 0)
+
     # New projects are numbered in order, and a number is not handed out twice.
     win.new_project()
     assert win.bench.project.name == "Calibration-001"

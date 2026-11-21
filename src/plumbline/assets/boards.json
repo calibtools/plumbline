@@ -1,0 +1,360 @@
+{
+ "source": "calibtools-site@b181133, src/lib/catalogPatterns.ts",
+ "boards": [
+  {
+   "part_number": "CT-CHA-P-200X150-D6",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 7,
+   "squares_y": 5,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-200X150-D5",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 7,
+   "squares_y": 5,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-200X150-D4",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 7,
+   "squares_y": 5,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_4X4_50",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-200X150-T36",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 7,
+   "squares_y": 5,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-300X200-D6",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-300X200-D5",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-300X200-D4",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_4X4_50",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-300X200-T36",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 25,
+   "marker_mm": 18,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-400X300-D6",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 12,
+   "squares_y": 9,
+   "square_mm": 30,
+   "marker_mm": 22,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-400X300-D5",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 12,
+   "squares_y": 9,
+   "square_mm": 30,
+   "marker_mm": 22,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-400X300-T36",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 12,
+   "squares_y": 9,
+   "square_mm": 30,
+   "marker_mm": 22,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-600X400-D6",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 14,
+   "squares_y": 9,
+   "square_mm": 40,
+   "marker_mm": 30,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-600X400-D5",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 14,
+   "squares_y": 9,
+   "square_mm": 40,
+   "marker_mm": 30,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-600X400-T36",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 14,
+   "squares_y": 9,
+   "square_mm": 40,
+   "marker_mm": 30,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-800X600-D6",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 15,
+   "squares_y": 11,
+   "square_mm": 50,
+   "marker_mm": 37,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-800X600-D5",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 15,
+   "squares_y": 11,
+   "square_mm": 50,
+   "marker_mm": 37,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-P-800X600-T36",
+   "product": "charuco-composite",
+   "kind": "charuco",
+   "squares_x": 15,
+   "squares_y": 11,
+   "square_mm": 50,
+   "marker_mm": 37,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-110X85-D6",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 10,
+   "marker_mm": 7.5,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-110X85-D5",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 10,
+   "marker_mm": 7.5,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-150X100-D6",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 11,
+   "squares_y": 7,
+   "square_mm": 12.5,
+   "marker_mm": 9.5,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-150X100-D5",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 11,
+   "squares_y": 7,
+   "square_mm": 12.5,
+   "marker_mm": 9.5,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-185X110-D6",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 12,
+   "squares_y": 7,
+   "square_mm": 14,
+   "marker_mm": 10.5,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-185X110-D5",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 12,
+   "squares_y": 7,
+   "square_mm": 14,
+   "marker_mm": 10.5,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-230X140-D6",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 14,
+   "squares_y": 8,
+   "square_mm": 15,
+   "marker_mm": 11,
+   "dictionary": "DICT_6X6_250",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHA-C-230X140-D5",
+   "product": "charuco-ceramic",
+   "kind": "charuco",
+   "squares_x": 14,
+   "squares_y": 8,
+   "square_mm": 15,
+   "marker_mm": 11,
+   "dictionary": "DICT_5X5_100",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-CHT-P-200X150-F",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 18
+  },
+  {
+   "part_number": "CT-CHT-P-200X150-C",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 7,
+   "squares_y": 5,
+   "square_mm": 25
+  },
+  {
+   "part_number": "CT-CHT-P-300X200-F",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 14,
+   "squares_y": 9,
+   "square_mm": 20
+  },
+  {
+   "part_number": "CT-CHT-P-300X200-C",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 25
+  },
+  {
+   "part_number": "CT-CHT-P-400X300-F",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 15,
+   "squares_y": 11,
+   "square_mm": 25
+  },
+  {
+   "part_number": "CT-CHT-P-400X300-C",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 11,
+   "squares_y": 8,
+   "square_mm": 35
+  },
+  {
+   "part_number": "CT-CHT-P-600X400-F",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 18,
+   "squares_y": 12,
+   "square_mm": 30
+  },
+  {
+   "part_number": "CT-CHT-P-600X400-C",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 14,
+   "squares_y": 9,
+   "square_mm": 40
+  },
+  {
+   "part_number": "CT-CHT-P-800X600-F",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 18,
+   "squares_y": 13,
+   "square_mm": 42
+  },
+  {
+   "part_number": "CT-CHT-P-800X600-C",
+   "product": "checkerboard-composite",
+   "kind": "checkerboard",
+   "squares_x": 15,
+   "squares_y": 11,
+   "square_mm": 50
+  }
+ ]
+}
