@@ -205,8 +205,17 @@ def test_fisheye_lens_from_images_to_export(tmp_path, charuco, fisheye_set):
 
     out = tmp_path / "out"
     out.mkdir()
-    bench.export_to(str(out), formats={"report", "opencv_yaml", "json", "ros", "xlsx"})
+    bench.export_to(str(out), formats={"report", "json", "ros", "xlsx", "maps", "example"})
     stem = bench.project.name
+    # The example needs the YAML it reads, so that file is written with it.
+    assert (out / f"{stem}-camera.yml").exists() and (out / f"{stem}-undistort-maps.npz").stat().st_size > 10000
+    assert f"{stem}-camera.yml" in (out / f"{stem}-example.py").read_text()
+    from plumbline.ui.export_dialog import ExportDialog
+    dialog = ExportDialog(bench.project, bench.result, bench)
+    dialog._checks["opencv_yaml"].setChecked(False)
+    dialog._checks["example"].setChecked(True)
+    assert dialog._checks["opencv_yaml"].isChecked() and "example" in dialog.file_names()
+    dialog.reject()
     ros = yaml.safe_load((out / f"{stem}-camera_info.yaml").read_text())
     assert ros["distortion_model"] == "equidistant"
     assert (out / f"{stem}-report.pdf").read_bytes().startswith(b"%PDF")

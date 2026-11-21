@@ -21,6 +21,7 @@ from ..core.calibrate import (
 )
 from ..core.detect import Detection, detect_file, read_gray
 from ..core.naming import export_files, result_signature, safe_name
+from ..core.export_code import write_example, write_maps
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
@@ -641,6 +642,8 @@ class Workbench(QWidget):
             self.project.title = safe_name(name)
         name = self.project.name
         formats = set(formats) if formats is not None else {"report", "opencv_yaml", "json", "ros"}
+        if "example" in formats:
+            formats.add("opencv_yaml")  # the example reads this file
         signature = result_signature(self.result)
         revision = self.project.revision_for(signature)
         files = export_files(name, revision)
@@ -660,6 +663,13 @@ class Workbench(QWidget):
         if "xlsx" in formats:
             write_xlsx(self.result, self.project.detections, base / files["xlsx"], name, revision)
             written.append(files["xlsx"])
+        if "maps" in formats:
+            write_maps(self.result, base / files["maps"])
+            written.append(files["maps"])
+        if "example" in formats:
+            write_example(self.result, base / files["example"], files["opencv_yaml"],
+                          files["maps"] if "maps" in formats else None)
+            written.append(files["example"])
         if "report" in formats:
             write_report(self.result, self.project.detections, base / files["report"], name, revision)
             written.append(files["report"])

@@ -41,6 +41,8 @@ def export_files(name: str, revision: int) -> dict[str, str]:
         "json": f"{stem}-camera.json",
         "xlsx": f"{stem}-data.xlsx",
         "ros": f"{stem}-camera_info.yaml",
+        "maps": f"{stem}-undistort-maps.npz",
+        "example": f"{stem}-example.py",
         "project": f"{safe_name(name)}.plumbline",
     }
 

@@ -205,7 +205,8 @@ def test_names_of_projects_and_exported_files():
     assert one["project"] == two["project"] == "Calibration-001.plumbline"
     assert one["opencv_xml"] == "Calibration-001-camera.xml"
     assert two["xlsx"] == "Calibration-001-r2-data.xlsx"
-    assert len(set(one.values()) | set(two.values())) == 13
+    assert one["maps"] == "Calibration-001-undistort-maps.npz" and two["example"] == "Calibration-001-r2-example.py"
+    assert len(set(one.values()) | set(two.values())) == 17
 
 
 def test_excel_workbook_holds_the_same_numbers(tmp_path, charuco, charuco_set):
@@ -360,3 +361,68 @@ def test_corrected_view_straightens_the_board(charuco, camera, charuco_set, fish
 def test_old_project_options_still_load():
     assert ModelOptions.from_dict({"k3": True, "something_newer": 1}) == ModelOptions(k3=True)
     assert ModelOptions.from_dict({}).fisheye is False
+
+
+def test_lookup_tables_and_example_script(tmp_path, charuco, charuco_set, fisheye_set):
+    """The exported tables and the exported script both reproduce Plumbline's corrected image."""
+    import subprocess
+    import sys
+
+    from plumbline.core.export_code import write_example, write_maps
+
+    for label, (_poses, images, dets), options in (
+        ("standard", charuco_set, ModelOptions()),
+        ("wide", fisheye_set, ModelOptions(fisheye=True)),
+    ):
+        result = calibrate(dets, charuco, options)
+        folder = tmp_path / label
+        folder.mkdir()
+        export.write_opencv_yaml(result, folder / "cam-camera.yml")
+        write_maps(result, folder / "cam-undistort-maps.npz")
+        write_example(result, folder / "cam-example.py", "cam-camera.yml", "cam-undistort-maps.npz")
+
+        img = images[3]
+        ours, _moved, new_K = lens.corrected_view(img, np.zeros((0, 2)), result.camera_matrix,
+                                                  result.distortion, result.fisheye)
+
+        data = np.load(folder / "cam-undistort-maps.npz")
+        assert data["map_x"].shape == img.shape and data["map_x"].dtype == np.float32
+        assert tuple(data["image_size"]) == (result.image_width, result.image_height)
+        assert str(data["distortion_model"]) == export.model_name(result)
+        assert np.allclose(data["new_camera_matrix"], new_K)
+        assert np.array_equal(cv2.remap(img, data["map_x"], data["map_y"], cv2.INTER_LINEAR), ours)
+
+        # The script runs on its own, as a user would run it, and writes the same picture.
+        cv2.imwrite(str(folder / "shot.png"), img)
+        run = subprocess.run([sys.executable, str(folder / "cam-example.py"), str(folder / "shot.png")],
+                             capture_output=True, text=True, timeout=120)
+        assert run.returncode == 0, run.stderr
+        assert ("OpenCV fisheye" if result.fisheye else "OpenCV standard") in run.stdout
+        theirs = cv2.imread(str(folder / "shot-corrected.png"), cv2.IMREAD_UNCHANGED)
+        assert np.array_equal(theirs, ours)
+
+        # Its helpers agree with Plumbline's own projection.
+        sys.path.insert(0, str(folder))
+        try:
+            sys.modules.pop("cam-example", None)
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(f"example_{label}", folder / "cam-example.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+        K, dist, size, fisheye = mod.load_camera()
+        assert fisheye == result.fisheye and size == (result.image_width, result.image_height)
+        v = result.views[0]
+        obj = charuco.object_points()
+        assert np.allclose(mod.project(obj, v.rvec, v.tvec, K, dist, fisheye),
+                           lens.project(obj, v.rvec, v.tvec, result.camera_matrix, result.distortion, fisheye),
+                           atol=1e-6)
+        mx, my, nk = mod.load_maps()
+        assert np.array_equal(mx, data["map_x"]) and np.allclose(nk, new_K)
+
+        # A wrong-sized image is refused with a plain message, not a stack trace.
+        cv2.imwrite(str(folder / "small.png"), img[::2, ::2])
+        bad = subprocess.run([sys.executable, str(folder / "cam-example.py"), str(folder / "small.png")],
+                             capture_output=True, text=True, timeout=120)
+        assert bad.returncode != 0 and "this calibration is for" in bad.stderr and "Traceback" not in bad.stderr
