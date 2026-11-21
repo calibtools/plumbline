@@ -118,8 +118,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.bench)
         self.bench.add_images([str(p) for p in paths])
 
-    def _saved(self, path: str, target: str, rms):
-        remember_project(path, target, rms)
+    def _saved(self, path: str, target: str, rms, due=None):
+        remember_project(path, target, rms, due)
 
 
 def create_app(argv=None) -> QApplication:

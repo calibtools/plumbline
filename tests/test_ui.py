@@ -109,6 +109,23 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     again = Project.load(str(tmp_path / "Sample-ChArUco.plumbline"))
     assert again.excluded == {first, second} and len(again.detections) == 24 and again.revision == 2
 
+    # A reminder set at export shows up on the start window once its date has come.
+    from plumbline.ui import welcome as welcome_module
+
+    assert bench.project.recheck_months == 6 and bench.project.exported_on  # the export window starts at 6 months
+    bench.export_to(str(tmp_path), recheck_months=6)
+    assert bench.project.due_date() > bench.project.exported_on
+    items = welcome_module.recent_projects()
+    assert items[0]["due"] == bench.project.due_date()
+    assert not welcome_module.is_due(items[0]["due"])
+    welcome_module.remember_project(bench.project.path, "ChArUco", 0.05, "2026-01-01")
+    win.show_welcome()
+    texts = [w.text() for w in win.welcome.findChildren(type(win.welcome.findChildren(welcome_module.QLabel)[0]))]
+    assert any("due for a new calibration" in t for t in texts)
+    assert any(t.startswith("Recalibrate, due 2026-01-01") for t in texts)
+    assert welcome_module.question_mailto().startswith("mailto:hello@calib.tools?subject=Plumbline%20question")
+    win.stack.setCurrentWidget(bench)
+
     # New projects are numbered in order, and a number is not handed out twice.
     win.new_project()
     assert win.bench.project.name == "Calibration-001"

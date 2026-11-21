@@ -231,3 +231,16 @@ def test_excel_workbook_holds_the_same_numbers(tmp_path, charuco, charuco_set):
     assert len(corners) == result.corner_total
     total = sum(c[6] ** 2 for c in corners) / len(corners)
     assert total ** 0.5 == pytest.approx(result.rms_point, rel=1e-6)
+
+
+def test_recalibration_due_dates():
+    from datetime import date
+
+    from plumbline.core.project import due_date, is_due
+
+    assert due_date("2026-11-22", 6) == "2027-05-22"
+    assert due_date("2026-08-31", 6) == "2027-02-28"
+    assert due_date("2026-11-22", 24) == "2028-11-22"
+    assert due_date("2026-11-22", 0) is None and due_date(None, 6) is None
+    assert is_due("2027-05-22", date(2027, 5, 22)) and not is_due("2027-05-22", date(2027, 5, 21))
+    assert not is_due(None)
