@@ -18,16 +18,17 @@ from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
 from ..core.detect import Detection, detect_file, read_gray
+from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
 from ..core.targets import CHARUCO, CHECKERBOARD, DICTIONARIES, Target
 from . import theme as T
+from .report import write_report
 from .widgets import (
     RESIDUAL_GAIN, CoverageMap, ErrorChart, ImageView, LinkLabel, SvgMark, Worker, button, frame,
     label, open_site, rule,
 )
 
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp)"
-GOOD_RMS = 0.5  # px per point; above this the result deserves a second look
 
 
 class StepButton(QPushButton):
@@ -550,7 +551,10 @@ class Workbench(QWidget):
         if export.ros_distortion_model(self.result):
             export.write_ros_camera_info(self.result, base / "camera_info.yaml")
             written.append("camera_info.yaml")
-        self.project.save(str(base / f"{self.project.name if self.project.path else 'calibration'}{SUFFIX}"))
+        name = self.project.name if self.project.path else "calibration"
+        write_report(self.result, self.project.detections, base / "report.pdf", name)
+        written.append("report.pdf")
+        self.project.save(str(base / f"{name}{SUFFIX}"))
         self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point)
         self._say(f"Saved {', '.join(written)} and the project file to {base}.")
         self._refresh()
@@ -643,16 +647,7 @@ class Workbench(QWidget):
         self.chart.set_data(bars, self._current)
 
     def _excluded_error(self, index: int) -> float | None:
-        """Error an excluded image would have under the current result (it took no part in the fit)."""
-        det, r = self.project.detections[index], self.result
-        if not det.usable:
-            return None
-        obj = r.target.object_points()[det.ids].astype(np.float64)
-        ok, rvec, tvec = cv2.solvePnP(obj, det.corners.astype(np.float64), r.camera_matrix, r.distortion)
-        if not ok:
-            return None
-        proj, _ = cv2.projectPoints(obj, rvec, tvec, r.camera_matrix, r.distortion)
-        return float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - det.corners) ** 2, axis=1))))
+        return error_outside_fit(self.result, self.project.detections[index])
 
     def _refresh(self):
         p, r = self.project, self.result
@@ -709,7 +704,7 @@ class Workbench(QWidget):
             ("done" if dets else "next" if n and t else "off",
              f"{good} good · {len(dets) - good} to check" if dets else "Find the corners"),
             ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
-            ("next" if r else "off", "Parameters"),
+            ("next" if r else "off", "Parameters and report"),
         ]
         for step, (kind, status) in zip(self.steps, states):
             step.set_state(kind, status)
@@ -756,26 +751,8 @@ class Workbench(QWidget):
         lay.setColumnMinimumWidth(2, 28)
 
     def _make_findings(self, r: CalibrationResult, share: float):
-        out = []
-        if r.rms_point <= GOOD_RMS:
-            out.append(("PASS", T.GREEN_TEXT, f"Error is low ({r.rms_point:.2f} px)."))
-        else:
-            out.append(("CHECK", T.RED_TEXT, f"Error is {r.rms_point:.2f} px. Look for blurred images, "
-                        "glare on the target, or wrong target sizes."))
-        flagged = suggest_exclusions(r)
-        if flagged:
-            names = ", ".join(Path(self.project.image_paths[i]).stem for i in flagged[:3])
-            out.append(("CHECK", T.RED_TEXT, f"{names} stand well above the rest. Click their bars to exclude them."))
-        if share < 0.7:
-            out.append(("CHECK", T.RED_TEXT, f"Corners cover {share * 100:.0f} % of the image. "
-                        "Add views that reach the empty cells in the coverage map."))
-        else:
-            out.append(("PASS", T.GREEN_TEXT, f"Corners cover {share * 100:.0f} % of the image."))
-        if len(r.views) < 10:
-            out.append(("NOTE", T.INK_MUTED, f"Only {len(r.views)} images in use. 15 to 30 give a steadier result."))
-        if r.excluded:
-            out.append(("NOTE", T.INK_MUTED, f"{len(r.excluded)} image{'s are' if len(r.excluded) != 1 else ' is'} excluded by you."))
-        return out
+        colors = {PASS: T.GREEN_TEXT, CHECK: T.RED_TEXT, NOTE: T.INK_MUTED}
+        return [(tag, colors[tag], text) for tag, text in findings(r, share)]
 
     def _fill_findings(self, items):
         lay = self.findings

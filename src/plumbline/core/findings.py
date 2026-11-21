@@ -1,0 +1,66 @@
+"""Plain-language reading of a calibration result."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from .calibrate import CalibrationResult, suggest_exclusions
+from .detect import Detection
+
+GOOD_RMS = 0.5  # px per point; above this the result deserves a second look
+PASS, CHECK, NOTE = "PASS", "CHECK", "NOTE"
+
+
+def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str, str]]:
+    """(tag, sentence) pairs, most important first."""
+    r = result
+    out: list[tuple[str, str]] = []
+    if r.rms_point <= GOOD_RMS:
+        out.append((PASS, f"Error is low ({r.rms_point:.2f} px)."))
+    else:
+        out.append((CHECK, f"Error is {r.rms_point:.2f} px. Look for blurred images, "
+                           "glare on the target, or wrong target sizes."))
+    flagged = suggest_exclusions(r)
+    if flagged:
+        by_index = {v.index: v for v in r.views}
+        names = ", ".join(Path(by_index[i].path).stem for i in flagged[:3])
+        out.append((CHECK, f"{names} stand well above the rest. Look at them; a lower error "
+                           "after excluding an image does not by itself mean a better result."))
+    if coverage_share < 0.7:
+        out.append((CHECK, f"Corners cover {coverage_share * 100:.0f} % of the image. "
+                           "Add views that reach the empty cells in the coverage map."))
+    else:
+        out.append((PASS, f"Corners cover {coverage_share * 100:.0f} % of the image."))
+    if len(r.views) < 10:
+        out.append((NOTE, f"Only {len(r.views)} images in use. 15 to 30 give a steadier result."))
+    if r.excluded:
+        n = len(r.excluded)
+        out.append((NOTE, f"{n} image{'s are' if n != 1 else ' is'} excluded by the user."))
+    return out
+
+
+def error_outside_fit(result: CalibrationResult, det: Detection) -> float | None:
+    """RMS error an image would have under this result, for images that took no part in the fit."""
+    if not det.usable:
+        return None
+    obj = result.target.object_points()[det.ids].astype(np.float64)
+    ok, rvec, tvec = cv2.solvePnP(obj, det.corners.astype(np.float64), result.camera_matrix, result.distortion)
+    if not ok:
+        return None
+    proj, _ = cv2.projectPoints(obj, rvec, tvec, result.camera_matrix, result.distortion)
+    return float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - det.corners) ** 2, axis=1))))
+
+
+def model_sentence(result: CalibrationResult) -> str:
+    o = result.options
+    parts = ["OpenCV standard model"]
+    parts.append("k3 estimated" if o.k3 else "k3 fixed at 0")
+    if not o.tangential:
+        parts.append("no tangential terms")
+    if o.rational:
+        parts.append("rational terms k4 to k6")
+    if o.thin_prism:
+        parts.append("thin prism terms s1 to s4")
+    return ", ".join(parts) + "."

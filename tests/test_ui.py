@@ -44,7 +44,7 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert r is not None and len(r.views) >= 18
     assert abs(r.fx - 1500) / 1500 < 0.005
     assert r.rms_point < 0.5
-    assert bench.steps[4]._status.text() == "Parameters"
+    assert bench.steps[4]._status.text() == "Parameters and report"
 
     first = r.views[2].index
     bench._toggle(first)
@@ -54,8 +54,10 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
 
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
     bench.export_all()
-    for name in ("camera.yml", "camera.json", "camera_info.yaml", "calibration.plumbline"):
+    for name in ("camera.yml", "camera.json", "camera_info.yaml", "calibration.plumbline", "report.pdf"):
         assert (tmp_path / name).stat().st_size > 100
+    pdf = (tmp_path / "report.pdf").read_bytes()
+    assert pdf.startswith(b"%PDF") and pdf.count(b"/Type /Page\n") + pdf.count(b"/Type /Page ") + pdf.count(b"/Type/Page") >= 2
     again = Project.load(str(tmp_path / "calibration.plumbline"))
     assert again.excluded == {first} and len(again.detections) == 24
 

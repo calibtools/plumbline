@@ -126,7 +126,7 @@ class WelcomePage(QWidget):
             ("Cameras", "One at a time"),
             ("Patterns", "ChArUco, checkerboard"),
             ("Lens model", "OpenCV standard"),
-            ("Export", "OpenCV YAML and JSON, ROS camera_info"),
+            ("Export", "OpenCV YAML and JSON, ROS, PDF report"),
         ]
         for r, (k, val) in enumerate(rows):
             a, b = label(k, "muted"), label(val)
@@ -137,7 +137,7 @@ class WelcomePage(QWidget):
         g.setColumnStretch(1, 1)
         v.addWidget(box)
         v.addSpacing(8)
-        v.addWidget(label("Next: PDF report, more patterns, fisheye lenses, uncertainty, several cameras.", "small", wrap=True))
+        v.addWidget(label("Next: more patterns, fisheye lenses, uncertainty, several cameras.", "small", wrap=True))
 
         v.addStretch(1)
         v.addWidget(label("Your images stay on this computer. Plumbline sends nothing.", "muted", wrap=True))
