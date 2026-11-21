@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Plumbline
+Comment=Camera calibration software by Calib.Tools
+Exec=Plumbline
+Icon=plumbline
+Categories=Science;Graphics;
+Terminal=false
