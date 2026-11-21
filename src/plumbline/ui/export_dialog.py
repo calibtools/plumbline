@@ -15,7 +15,7 @@ from ..core.project import Project
 from . import theme as T
 from .widgets import button, frame, label, rule
 
-DEFAULT_FORMATS = {"report", "opencv_yaml", "json", "ros"}  # XML is offered, off until ticked once
+DEFAULT_FORMATS = {"report", "opencv_yaml", "json", "ros"}  # XML and Excel are offered, off until ticked once
 
 KINDS = (
     ("report", "Report, PDF"),
@@ -23,6 +23,7 @@ KINDS = (
     ("opencv_xml", "OpenCV XML, with per-image figures"),
     ("json", "JSON, with per-image detail"),
     ("ros", "ROS camera_info"),
+    ("xlsx", "Excel, every image and corner"),
     ("project", "Plumbline project"),
 )
 

@@ -203,4 +203,31 @@ def test_names_of_projects_and_exported_files():
     assert two["ros"] == "Calibration-001-r2-camera_info.yaml"
     assert one["project"] == two["project"] == "Calibration-001.plumbline"
     assert one["opencv_xml"] == "Calibration-001-camera.xml"
-    assert len(set(one.values()) | set(two.values())) == 11
+    assert two["xlsx"] == "Calibration-001-r2-data.xlsx"
+    assert len(set(one.values()) | set(two.values())) == 13
+
+
+def test_excel_workbook_holds_the_same_numbers(tmp_path, charuco, charuco_set):
+    from openpyxl import load_workbook
+
+    from plumbline.core.export_xlsx import write_xlsx
+
+    _poses, _images, dets = charuco_set
+    result = calibrate(dets, charuco, excluded={4})
+    path = tmp_path / "data.xlsx"
+    write_xlsx(result, dets, path, "bench-cam", 2)
+    wb = load_workbook(path)
+    assert wb.sheetnames == ["Summary", "Images", "Corners"]
+    summary = {row[0]: row[1] for row in wb["Summary"].iter_rows(min_row=2, values_only=True) if row[0]}
+    assert summary["Project"] == "bench-cam" and summary["Revision"] == 2
+    assert summary["fx, px"] == pytest.approx(result.fx)
+    assert summary["k1"] == pytest.approx(result.distortion[0])
+    assert summary["RMS per point, px"] == pytest.approx(result.rms_point)
+    images = list(wb["Images"].iter_rows(min_row=2, values_only=True))
+    assert len(images) == len(dets)
+    assert images[4][4] == "excluded" and images[4][3] is None and images[4][2] > 0
+    assert images[0][2] == pytest.approx(result.views[0].rms_point)
+    corners = list(wb["Corners"].iter_rows(min_row=2, values_only=True))
+    assert len(corners) == result.corner_total
+    total = sum(c[6] ** 2 for c in corners) / len(corners)
+    assert total ** 0.5 == pytest.approx(result.rms_point, rel=1e-6)

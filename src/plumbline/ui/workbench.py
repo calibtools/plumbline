@@ -19,6 +19,7 @@ from ..core.calibrate import (
 )
 from ..core.detect import Detection, detect_file, read_gray
 from ..core.naming import export_files, result_signature, safe_name
+from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
 from ..core.targets import CHARUCO, CHECKERBOARD, DICTIONARIES, Target
@@ -580,6 +581,9 @@ class Workbench(QWidget):
         if "ros" in formats and export.ros_distortion_model(self.result):
             export.write_ros_camera_info(self.result, base / files["ros"], safe_name(name))
             written.append(files["ros"])
+        if "xlsx" in formats:
+            write_xlsx(self.result, self.project.detections, base / files["xlsx"], name, revision)
+            written.append(files["xlsx"])
         if "report" in formats:
             write_report(self.result, self.project.detections, base / files["report"], name, revision)
             written.append(files["report"])
