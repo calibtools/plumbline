@@ -1,0 +1,130 @@
+"""Write calibration results in the formats other software reads."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+from .. import __version__
+from .calibrate import CalibrationResult
+
+DIST_NAMES = ["k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6", "s1", "s2", "s3", "s4", "tx", "ty"]
+
+
+def _fmt(value: float) -> str:
+    return repr(float(value))
+
+
+def _row(values) -> str:
+    return "[" + ", ".join(_fmt(v) for v in values) + "]"
+
+
+def result_summary(result: CalibrationResult) -> dict:
+    """Plain-data form of a result, used by the JSON export and the project file."""
+    dist = result.distortion.tolist()
+    return {
+        "generator": f"Plumbline {__version__} by Calib.Tools",
+        "opencv_version": result.opencv_version,
+        "model": "opencv",
+        "image_width": result.image_width,
+        "image_height": result.image_height,
+        "camera_matrix": result.camera_matrix.tolist(),
+        "distortion_coefficients": dist,
+        "distortion_names": DIST_NAMES[: len(dist)],
+        "rms_per_point_px": result.rms_point,
+        "rms_per_coordinate_px": result.rms_coordinate,
+        "rms_note": (
+            "rms_per_point_px is sqrt(mean(dx^2 + dy^2)), the value OpenCV reports. "
+            "rms_per_coordinate_px counts x and y separately and equals it divided by sqrt(2)."
+        ),
+        "views_used": len(result.views),
+        "corners_used": result.corner_total,
+        "target": result.target.to_dict(),
+        "options": result.options.to_dict(),
+        "views": [
+            {
+                "file": Path(v.path).name,
+                "corners": v.corner_count,
+                "rms_per_point_px": v.rms_point,
+                "max_error_px": v.max_error,
+                "rvec": v.rvec.tolist(),
+                "tvec_mm": v.tvec.tolist(),
+            }
+            for v in result.views
+        ],
+        "excluded_files": [],
+    }
+
+
+def write_json(result: CalibrationResult, path: str | Path) -> None:
+    Path(path).write_text(json.dumps(result_summary(result), indent=2), encoding="utf-8")
+
+
+def opencv_yaml(result: CalibrationResult) -> str:
+    """OpenCV FileStorage YAML, readable with cv::FileStorage and cv2.FileStorage."""
+    K = result.camera_matrix.reshape(-1)
+    d = result.distortion.reshape(-1)
+    return (
+        "%YAML:1.0\n---\n"
+        f"# Written by Plumbline {__version__} by Calib.Tools, https://calib.tools\n"
+        f"image_width: {result.image_width}\n"
+        f"image_height: {result.image_height}\n"
+        "camera_matrix: !!opencv-matrix\n"
+        "   rows: 3\n   cols: 3\n   dt: d\n"
+        f"   data: {_row(K)}\n"
+        "distortion_coefficients: !!opencv-matrix\n"
+        f"   rows: 1\n   cols: {len(d)}\n   dt: d\n"
+        f"   data: {_row(d)}\n"
+        f"avg_reprojection_error: {_fmt(result.rms_point)}\n"
+    )
+
+
+def write_opencv_yaml(result: CalibrationResult, path: str | Path) -> None:
+    Path(path).write_text(opencv_yaml(result), encoding="utf-8")
+
+
+def ros_distortion_model(result: CalibrationResult) -> str | None:
+    """ROS distortion model name for this result, or None if ROS has none for it."""
+    n = len(result.distortion)
+    if n == 5:
+        return "plumb_bob"
+    if n == 8:
+        return "rational_polynomial"
+    return None
+
+
+def ros_camera_info(result: CalibrationResult, camera_name: str = "camera") -> str:
+    """camera_info YAML as used by ROS camera_calibration_parsers.
+
+    Raises ValueError for lens models ROS has no standard name for (thin prism).
+    """
+    model = ros_distortion_model(result)
+    if model is None:
+        raise ValueError(
+            "ROS camera_info has no standard distortion model for a result with "
+            f"{len(result.distortion)} coefficients. Calibrate without the thin prism terms."
+        )
+    K = result.camera_matrix
+    P = np.hstack([K, np.zeros((3, 1))])
+    R = np.eye(3)
+    d = result.distortion
+    return (
+        f"# Written by Plumbline {__version__} by Calib.Tools, https://calib.tools\n"
+        f"image_width: {result.image_width}\n"
+        f"image_height: {result.image_height}\n"
+        f"camera_name: {camera_name}\n"
+        "camera_matrix:\n  rows: 3\n  cols: 3\n"
+        f"  data: {_row(K.reshape(-1))}\n"
+        f"distortion_model: {model}\n"
+        f"distortion_coefficients:\n  rows: 1\n  cols: {len(d)}\n"
+        f"  data: {_row(d)}\n"
+        "rectification_matrix:\n  rows: 3\n  cols: 3\n"
+        f"  data: {_row(R.reshape(-1))}\n"
+        "projection_matrix:\n  rows: 3\n  cols: 4\n"
+        f"  data: {_row(P.reshape(-1))}\n"
+    )
+
+
+def write_ros_camera_info(result: CalibrationResult, path: str | Path, camera_name: str = "camera") -> None:
+    Path(path).write_text(ros_camera_info(result, camera_name), encoding="utf-8")

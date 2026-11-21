@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plumbline-calib"
+version = "0.1.0.dev0"
+description = "Camera calibration software by Calib.Tools"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "opencv-python-headless>=4.10",
+  "PySide6-Essentials>=6.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "PyYAML>=6", "pyinstaller>=6.6"]
+
+[project.gui-scripts]
+plumbline = "plumbline.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+plumbline = ["assets/*", "assets/fonts/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
