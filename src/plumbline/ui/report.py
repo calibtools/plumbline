@@ -28,13 +28,14 @@ def write_report(
     detections: list[Detection],
     path: str | Path,
     project_name: str = "Calibration",
+    revision: int = 1,
 ) -> int:
     """Write the report. Returns the number of pages."""
     writer = QPdfWriter(str(path))
     writer.setResolution(96)
     writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
-    writer.setTitle(f"{project_name} calibration report")
+    writer.setTitle(f"{project_name} calibration report, revision {revision}")
     writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
 
     rows = _image_rows(result, detections)
@@ -43,7 +44,7 @@ def write_report(
     try:
         # Map the 794 x 1123 layout onto whatever device size the writer reports.
         p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
-        _summary_page(p, result, detections, project_name, 1, pages)
+        _summary_page(p, result, detections, project_name, revision, 1, pages)
         for n in range(pages - 1):
             writer.newPage()
             _table_page(p, rows[n * ROWS_PER_PAGE : (n + 1) * ROWS_PER_PAGE], project_name, n + 2, pages)
@@ -124,14 +125,14 @@ def _image_rows(result: CalibrationResult, detections: list[Detection]):
 
 
 # -------------------------------------------------------------------- pages
-def _summary_page(p, r: CalibrationResult, detections, project_name, page, pages) -> None:
+def _summary_page(p, r: CalibrationResult, detections, project_name, revision, page, pages) -> None:
     _frame(p, page, pages, project_name)
     W = PAGE_W - 2 * M
     y = M + 48
 
     y += _text(p, M, y, W, project_name, T.mono(22, 600)) + 4
     y += _text(p, M, y, W, f"Single camera  ·  {r.image_width} × {r.image_height} px  ·  "
-               f"{date.today().isoformat()}", T.sans(12), T.INK_MUTED) + 22
+               f"{date.today().isoformat()}  \u00b7  Revision {revision}", T.sans(12), T.INK_MUTED) + 22
 
     # RMS block, with what went into it on the right.
     _eyebrow(p, M, y, "RMS reprojection error")

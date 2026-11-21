@@ -54,16 +54,43 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
 
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
     bench.export_all()
-    for name in ("camera.yml", "camera.json", "camera_info.yaml", "calibration.plumbline", "report.pdf"):
+    first_set = ("Sample-ChArUco-camera.yml", "Sample-ChArUco-camera.json", "Sample-ChArUco-camera_info.yaml",
+                 "Sample-ChArUco-report.pdf", "Sample-ChArUco.plumbline")
+    for name in first_set:
         assert (tmp_path / name).stat().st_size > 100
-    pdf = (tmp_path / "report.pdf").read_bytes()
-    assert pdf.startswith(b"%PDF") and pdf.count(b"/Type /Page\n") + pdf.count(b"/Type /Page ") + pdf.count(b"/Type/Page") >= 2
-    again = Project.load(str(tmp_path / "calibration.plumbline"))
-    assert again.excluded == {first} and len(again.detections) == 24
+    pdf = (tmp_path / "Sample-ChArUco-report.pdf").read_bytes()
+    assert pdf.startswith(b"%PDF")
+    assert "camera_name: Sample-ChArUco" in (tmp_path / "Sample-ChArUco-camera_info.yaml").read_text()
+    assert bench.project.revision == 1
+
+    # The same result again is the same revision: nothing new appears.
+    bench.export_all()
+    assert bench.project.revision == 1
+    assert not list(tmp_path.glob("*-r2-*"))
+
+    # A changed result is revision 2, written beside revision 1, which stays as it was.
+    before = (tmp_path / "Sample-ChArUco-camera.yml").read_text()
+    second = bench.result.views[5].index
+    bench._toggle(second)
+    _wait(app, win)
+    bench.export_all()
+    assert bench.project.revision == 2
+    for name in ("Sample-ChArUco-r2-camera.yml", "Sample-ChArUco-r2-report.pdf"):
+        assert (tmp_path / name).stat().st_size > 100
+    assert (tmp_path / "Sample-ChArUco-camera.yml").read_text() == before
+    again = Project.load(str(tmp_path / "Sample-ChArUco.plumbline"))
+    assert again.excluded == {first, second} and len(again.detections) == 24 and again.revision == 2
+
+    # New projects are numbered in order, and a number is not handed out twice.
+    win.new_project()
+    assert win.bench.project.name == "Calibration-001"
+    win.new_project()
+    assert win.bench.project.name == "Calibration-002"
 
     win.show_welcome()
     assert win.stack.currentWidget() is win.welcome
-    win.open_path(str(tmp_path / "calibration.plumbline"))
+    win.open_path(str(tmp_path / "Sample-ChArUco.plumbline"))
     _wait(app, win)
     assert win.bench.result is not None and first in win.bench.result.excluded
+    assert win.bench.project.name == "Sample-ChArUco" and win.bench.project.revision == 2
     win.close()

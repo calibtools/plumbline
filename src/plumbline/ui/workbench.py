@@ -8,7 +8,7 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-    QGridLayout, QHBoxLayout, QHeaderView, QMessageBox, QProgressBar, QPushButton, QSpinBox,
+    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QSpinBox,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -18,6 +18,7 @@ from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
 from ..core.detect import Detection, detect_file, read_gray
+from ..core.naming import export_files, result_signature, safe_name
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
 from ..core.targets import CHARUCO, CHECKERBOARD, DICTIONARIES, Target
@@ -121,6 +122,15 @@ class Workbench(QWidget):
             s.clicked.connect(act)
             h.addWidget(s)
         h.addStretch(1)
+        self.name_btn = QPushButton("")
+        self.name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.name_btn.setToolTip("Rename this project. Exported files carry this name.")
+        self.name_btn.setStyleSheet(
+            f'border: 0; padding: 0 4px; min-height: 0; font-family: "{T.MONO}"; font-size: 13px; '
+            f"font-weight: 500; color: {T.INK_MUTED}; text-align: right;")
+        self.name_btn.clicked.connect(self.rename_project)
+        h.addWidget(self.name_btn)
+        h.addSpacing(16)
         h.addWidget(LinkLabel(T.VISIT, T.SITE, "monolink"))
         return w
 
@@ -545,19 +555,30 @@ class Workbench(QWidget):
         if not folder:
             return
         base = Path(folder)
-        written = ["camera.yml", "camera.json"]
-        export.write_opencv_yaml(self.result, base / "camera.yml")
-        export.write_json(self.result, base / "camera.json")
+        name = self.project.name
+        signature = result_signature(self.result)
+        revision = self.project.revision_for(signature)
+        files = export_files(name, revision)
+        export.write_opencv_yaml(self.result, base / files["opencv_yaml"])
+        export.write_json(self.result, base / files["json"])
+        written = [files["opencv_yaml"], files["json"]]
         if export.ros_distortion_model(self.result):
-            export.write_ros_camera_info(self.result, base / "camera_info.yaml")
-            written.append("camera_info.yaml")
-        name = self.project.name if self.project.path else "calibration"
-        write_report(self.result, self.project.detections, base / "report.pdf", name)
-        written.append("report.pdf")
-        self.project.save(str(base / f"{name}{SUFFIX}"))
+            export.write_ros_camera_info(self.result, base / files["ros"], safe_name(name))
+            written.append(files["ros"])
+        write_report(self.result, self.project.detections, base / files["report"], name, revision)
+        written.append(files["report"])
+        self.project.revision, self.project.export_signature = revision, signature
+        self.project.save(str(base / files["project"]))
         self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point)
-        self._say(f"Saved {', '.join(written)} and the project file to {base}.")
+        self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
         self._refresh()
+
+    def rename_project(self):
+        text, ok = QInputDialog.getText(self, "Project name", "Name used for this project and its exported files:",
+                                        text=self.project.name)
+        if ok and text.strip():
+            self.project.title = safe_name(text)
+            self._refresh()
 
     def _toggle(self, index: int):
         dets = self.project.detections
@@ -653,6 +674,8 @@ class Workbench(QWidget):
         p, r = self.project, self.result
         dets = p.detections
         n = len(p.image_paths)
+        shown = p.name if len(p.name) <= 20 else p.name[:19] + "\u2026"
+        self.name_btn.setText(shown + (f" \u00b7 r{p.revision}" if p.revision else ""))
         keep = self._current
         self.table.blockSignals(True)
         self.table.setRowCount(n)

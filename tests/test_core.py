@@ -174,3 +174,19 @@ def test_boards_of_a_set_are_told_apart_by_their_marker_ids(camera):
     assert "IDs 108 to 161" in wrong.note and "First marker ID 108" in wrong.note
     with pytest.raises(ValueError, match="only has IDs"):
         Target(CHARUCO, 12, 9, 60.0, 45.0, "DICT_5X5_50")
+
+
+def test_names_of_projects_and_exported_files():
+    from plumbline.core.naming import default_name, export_files, safe_name
+
+    assert default_name(1) == "Calibration-001" and default_name(42) == "Calibration-042"
+    assert safe_name('  bench cam: left/right?  ') == "bench-cam-leftright"
+    assert safe_name("...") == "Calibration" and safe_name("con") == "Calibration"
+    assert safe_name("左相机 01") == "左相机-01"
+    one, two = export_files("Calibration-001", 1), export_files("Calibration-001", 2)
+    assert one["report"] == "Calibration-001-report.pdf"
+    assert one["opencv_yaml"] == "Calibration-001-camera.yml"
+    assert two["report"] == "Calibration-001-r2-report.pdf"
+    assert two["ros"] == "Calibration-001-r2-camera_info.yaml"
+    assert one["project"] == two["project"] == "Calibration-001.plumbline"
+    assert len(set(one.values()) | set(two.values())) == 9
