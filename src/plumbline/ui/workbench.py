@@ -1,6 +1,7 @@
 """Main working window: target, images, detection, calibration, export."""
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import cv2
@@ -70,7 +71,7 @@ class StepButton(QPushButton):
 
 class Workbench(QWidget):
     go_home = Signal()
-    project_saved = Signal(str, str, object)  # path, target description, rms
+    project_saved = Signal(str, str, object, object)  # path, target description, rms, recalibration due date
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -556,9 +557,10 @@ class Workbench(QWidget):
         dialog = ExportDialog(self.project, self.result, self)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
-        self.export_to(dialog.folder, dialog.project_name, dialog.formats())
+        self.export_to(dialog.folder, dialog.project_name, dialog.formats(), dialog.recheck_months)
 
-    def export_to(self, folder: str, name: str | None = None, formats: set[str] | None = None):
+    def export_to(self, folder: str, name: str | None = None, formats: set[str] | None = None,
+                  recheck_months: int | None = None):
         """Write one revision: the chosen files plus the project file, all named after the project."""
         base = Path(folder)
         if name:
@@ -589,8 +591,12 @@ class Workbench(QWidget):
             written.append(files["report"])
         written.append(files["project"])
         self.project.revision, self.project.export_signature = revision, signature
+        self.project.exported_on = date.today().isoformat()
+        if recheck_months is not None:
+            self.project.recheck_months = recheck_months
         self.project.save(str(base / files["project"]))
-        self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point)
+        self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point,
+                                self.project.due_date())
         self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
         self._refresh()
 

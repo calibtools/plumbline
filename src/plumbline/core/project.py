@@ -9,6 +9,28 @@ from .calibrate import ModelOptions
 from .detect import Detection
 from .targets import Target
 
+from datetime import date
+
+
+def due_date(calibrated_on: str | None, months: int) -> str | None:
+    """Calendar date `months` after `calibrated_on` (ISO), clamped to the end of shorter months."""
+    if not calibrated_on or months <= 0:
+        return None
+    d = date.fromisoformat(calibrated_on)
+    index = d.month - 1 + months
+    year, month = d.year + index // 12, index % 12 + 1
+    for day in (d.day, 30, 29, 28):
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def is_due(due: str | None, today: date | None = None) -> bool:
+    return bool(due) and date.fromisoformat(due) <= (today or date.today())
+
+
 FORMAT = "plumbline-project/1"
 SUFFIX = ".plumbline"
 
@@ -25,6 +47,12 @@ class Project:
     title: str | None = None  # the name the user sees; file names are built from it
     revision: int = 0  # number of the last export, 0 = never exported
     export_signature: str | None = None  # fingerprint of the result of the last export
+    exported_on: str | None = None  # ISO date of the last export, taken as the calibration date
+    recheck_months: int = 0  # remind to calibrate again after this many months, 0 = no reminder
+
+    def due_date(self) -> str | None:
+        """ISO date from which this camera should be calibrated again, or None."""
+        return due_date(self.exported_on, self.recheck_months)
 
     @property
     def name(self) -> str:
@@ -50,6 +78,8 @@ class Project:
             "title": self.title,
             "revision": self.revision,
             "export_signature": self.export_signature,
+            "exported_on": self.exported_on,
+            "recheck_months": self.recheck_months,
         }
 
     def save(self, path: str | None = None) -> None:
@@ -75,4 +105,6 @@ class Project:
             title=data.get("title"),
             revision=int(data.get("revision") or 0),
             export_signature=data.get("export_signature"),
+            exported_on=data.get("exported_on"),
+            recheck_months=int(data.get("recheck_months") or 0),
         )

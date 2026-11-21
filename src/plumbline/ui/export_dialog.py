@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths, Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLineEdit, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLineEdit, QVBoxLayout,
 )
 
 from ..core import export
@@ -15,6 +15,7 @@ from ..core.project import Project
 from . import theme as T
 from .widgets import button, frame, label, rule
 
+RECHECK_CHOICES = (("No reminder", 0), ("In 3 months", 3), ("In 6 months", 6), ("In 12 months", 12), ("In 24 months", 24))
 DEFAULT_FORMATS = {"report", "opencv_yaml", "json", "ros"}  # XML and Excel are offered, off until ticked once
 
 KINDS = (
@@ -72,6 +73,19 @@ class ExportDialog(QDialog):
         row.addWidget(self.folder_edit, 1)
         row.addWidget(browse)
         v.addLayout(row)
+        v.addSpacing(20)
+
+        v.addWidget(label("Remind me to calibrate this camera again"))
+        v.addSpacing(6)
+        self.recheck = QComboBox()
+        self.recheck.setFixedHeight(40)
+        for text, months in RECHECK_CHOICES:
+            self.recheck.addItem(text, months)
+        saved = project.recheck_months if project.revision else int(QSettings().value("recheck_months", 6) or 0)
+        self.recheck.setCurrentIndex(max(0, self.recheck.findData(saved)))
+        v.addWidget(self.recheck)
+        v.addSpacing(4)
+        v.addWidget(label("The reminder appears on the start window of this computer. Nothing is sent anywhere.", "small"))
         v.addSpacing(20)
 
         v.addWidget(label("FILES", "eyebrow"))
@@ -150,8 +164,13 @@ class ExportDialog(QDialog):
         files = export_files(self.project_name, self._revision)
         return {k: v for k, v in files.items() if k in self.formats()}
 
+    @property
+    def recheck_months(self) -> int:
+        return int(self.recheck.currentData() or 0)
+
     def accept(self):
         settings = QSettings()
+        settings.setValue("recheck_months", self.recheck_months)
         settings.setValue("export_folder", self.folder)
         settings.setValue("export_formats", sorted(self.formats() - {"project"}))
         super().accept()
