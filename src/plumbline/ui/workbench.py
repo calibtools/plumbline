@@ -23,6 +23,7 @@ from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
 from ..core.targets import CHARUCO, CHECKERBOARD, DICTIONARIES, Target
 from . import theme as T
+from .export_dialog import ExportDialog
 from .report import write_report
 from .widgets import (
     RESIDUAL_GAIN, CoverageMap, ErrorChart, ImageView, LinkLabel, SvgMark, Worker, button, frame,
@@ -551,10 +552,16 @@ class Workbench(QWidget):
         if self.result is None:
             self._say("Calibrate first, then export.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Choose a folder for the calibration files")
-        if not folder:
+        dialog = ExportDialog(self.project, self.result, self)
+        if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
+        self.export_to(dialog.folder, dialog.project_name)
+
+    def export_to(self, folder: str, name: str | None = None):
+        """Write one revision: report, parameter files and the project file, all named after the project."""
         base = Path(folder)
+        if name:
+            self.project.title = safe_name(name)
         name = self.project.name
         signature = result_signature(self.result)
         revision = self.project.revision_for(signature)

@@ -24,7 +24,6 @@ def _wait(app, win, limit=240):
 
 def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     from PySide6.QtCore import QSettings, QStandardPaths
-    from PySide6.QtWidgets import QFileDialog
 
     from plumbline.app import MainWindow, create_app
     from plumbline.core.project import Project
@@ -52,7 +51,26 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert first in bench.result.excluded
     assert bench.table.item(first, 2).text() == "out"
 
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    from plumbline.ui.export_dialog import ExportDialog
+
+    # The export window shows the files before they are written and follows the name typed.
+    dialog = ExportDialog(bench.project, bench.result, bench)
+    dialog.folder_edit.setText(str(tmp_path))
+    assert dialog.revision == 1 and dialog.ok.isEnabled()
+    assert dialog.file_names()["report"] == "Sample-ChArUco-report.pdf"
+    dialog.name_edit.setText("line 3: left/cam")
+    assert dialog.project_name == "line-3-leftcam"
+    assert dialog.file_names()["opencv_yaml"] == "line-3-leftcam-camera.yml"
+    assert "removed" in dialog.files_note.text()
+    dialog.folder_edit.setText(str(tmp_path / "missing"))
+    assert not dialog.ok.isEnabled()
+    dialog.reject()
+
+    def accept_as_is(self):
+        self.folder_edit.setText(str(tmp_path))
+        return ExportDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ExportDialog, "exec", accept_as_is)
     bench.export_all()
     first_set = ("Sample-ChArUco-camera.yml", "Sample-ChArUco-camera.json", "Sample-ChArUco-camera_info.yaml",
                  "Sample-ChArUco-report.pdf", "Sample-ChArUco.plumbline")
