@@ -66,8 +66,13 @@ jobs:
           mkdir -p dist/installer dist/dmg
           cp -R dist/Plumbline.app dist/dmg/
           ln -s /Applications dist/dmg/Applications
-          hdiutil create -volname "Plumbline" -srcfolder dist/dmg -ov -format ULMO \
-            "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.dmg"
+          # hdiutil now and then answers "Resource busy" on hosted runners; a second try goes through.
+          for attempt in 1 2 3 4 5; do
+            if hdiutil create -volname "Plumbline" -srcfolder dist/dmg -ov -format ULMO \
+              "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.dmg"; then break; fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            sleep 10
+          done
       - name: Open the disk image and start the app from it
         if: runner.os == 'macOS'
         run: |
