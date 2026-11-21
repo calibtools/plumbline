@@ -1,50 +1,41 @@
 # Plumbline
 
-**Live: https://plumbline.calib.tools**
+Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app for Windows, Linux and macOS. MIT license.
 
-**Free camera calibration, in your browser.**
+**Status: in development. There is no release to download yet.**
 
-Plumbline is an open-source tool for single-camera calibration using ChArUco boards. All image processing happens locally in your browser — your pictures never leave your machine. Detection and calibration run in a Web Worker so the UI stays responsive. Works offline as a PWA.
+## What works now
 
-Powered by [OpenCV](https://opencv.org) (opencv.js 4.9.0, single-file WASM). Made by [Calib.Tools](https://calib.tools).
+- One camera at a time
+- Targets: ChArUco and checkerboard
+- OpenCV standard lens model (optional k3, tangential, rational and thin prism terms)
+- Reprojection error per image, corner coverage map, excluding images and solving again
+- Export: OpenCV YAML, JSON, ROS `camera_info`
+- Project files, built-in sample images
 
-## P1 Scope
+Not yet: PDF report, installers, more patterns, fisheye models, uncertainty, several cameras.
 
-- ChArUco board detection (all predefined ArUco dictionaries)
-- Monocular camera calibration (standard, rational, thin prism models)
-- Corner coverage heatmap with suggestions
-- Board tilt distribution analysis
-- Export: OpenCV YAML/JSON, ROS camera_info YAML, Plumbline JSON
-- Installable PWA — works offline (Workbox precache)
-- Web Worker for detection + calibration (main thread max gap: 20 ms)
-- Consistency tests against Python OpenCV (camera matrix relative diff < 3e-9)
+## How results are checked
 
-## Local Development
+Detection and calibration are done by OpenCV; Plumbline adds the workflow, the checks and the display around it.
+The test suite renders images of a target through a camera whose parameters are known
+(`plumbline.core.synth`, every pixel mapped back through the lens model) and checks that the
+calibration recovers that camera. Run it with `pytest`.
 
-```bash
-pnpm install
-pnpm dev          # Start dev server at http://localhost:5173
+The error figure shown is the RMS per point, `sqrt(mean(dx² + dy²))`, which is what OpenCV reports.
+Some tools count x and y separately; that figure is smaller by a factor of √2. Exports carry both.
+
+## Run from source
+
+```
+python -m pip install -e ".[dev]"
+python -m plumbline
 ```
 
-## Testing
+## Earlier browser version
 
-```bash
-pnpm test                    # Unit tests
-pnpm test:consistency        # Consistency tests (real src/core vs Python reference)
-pnpm test:worker             # Worker responsiveness test
-pnpm test:offline            # Offline PWA test (requires pnpm build first)
-pnpm test:browser            # All browser-based tests
-```
+The browser prototype (TypeScript, opencv.js) is kept on the branch `archive/browser-p1`. It is no longer developed.
 
-### Generating Reference Fixtures
+## Third-party
 
-```bash
-cd tools/reference
-pip install -r requirements.txt
-python3 render_synthetic.py     # 25 synthetic ChArUco images (1280×960)
-python3 calibrate_reference.py  # Reference calibration → reference.json
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+OpenCV (Apache 2.0), Qt for Python / PySide6 (LGPL v3), NumPy (BSD), Geist typeface (SIL OFL 1.1, see `src/plumbline/assets/fonts/OFL.txt`).
