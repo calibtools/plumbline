@@ -10,7 +10,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Targets: ChArUco and checkerboard
 - OpenCV standard lens model (optional k3, tangential, rational and thin prism terms)
 - Reprojection error per image, corner coverage map, excluding images and solving again
-- Export: OpenCV YAML, JSON, ROS `camera_info`, PDF report
+- Export: OpenCV YAML and XML, JSON, ROS `camera_info`, PDF report; choose which files to write
 - Boards of a set that continue the marker numbering (first marker ID)
 - Project files, built-in sample images
 

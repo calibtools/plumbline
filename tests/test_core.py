@@ -146,6 +146,19 @@ def test_exports_round_trip(tmp_path, charuco, charuco_set):
     with pytest.raises(ValueError):
         export.ros_camera_info(prism)
 
+    xml = tmp_path / "camera.xml"
+    export.write_opencv_xml(result, xml)
+    assert xml.read_text().lstrip().startswith("<?xml")
+    fs = cv2.FileStorage(str(xml), cv2.FILE_STORAGE_READ)
+    assert np.allclose(fs.getNode("camera_matrix").mat(), result.camera_matrix)
+    assert np.allclose(fs.getNode("distortion_coefficients").mat().reshape(-1), result.distortion)
+    assert fs.getNode("avg_reprojection_error").real() == pytest.approx(result.rms_point)
+    errors = fs.getNode("per_view_reprojection_errors").mat().reshape(-1)
+    assert np.allclose(errors, [v.rms_point for v in result.views])
+    names = fs.getNode("image_files")
+    assert names.size() == len(result.views) and names.at(0).string() == "view-00.png"
+    fs.release()
+
 
 def test_project_round_trip(tmp_path, charuco, charuco_set):
     _poses, _images, dets = charuco_set
@@ -189,4 +202,5 @@ def test_names_of_projects_and_exported_files():
     assert two["report"] == "Calibration-001-r2-report.pdf"
     assert two["ros"] == "Calibration-001-r2-camera_info.yaml"
     assert one["project"] == two["project"] == "Calibration-001.plumbline"
-    assert len(set(one.values()) | set(two.values())) == 9
+    assert one["opencv_xml"] == "Calibration-001-camera.xml"
+    assert len(set(one.values()) | set(two.values())) == 11

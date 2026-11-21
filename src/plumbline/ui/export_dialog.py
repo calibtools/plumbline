@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths, Qt
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLineEdit, QVBoxLayout,
+    QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLineEdit, QVBoxLayout,
 )
 
 from ..core import export
@@ -15,9 +15,12 @@ from ..core.project import Project
 from . import theme as T
 from .widgets import button, frame, label, rule
 
+DEFAULT_FORMATS = {"report", "opencv_yaml", "json", "ros"}  # XML is offered, off until ticked once
+
 KINDS = (
     ("report", "Report, PDF"),
     ("opencv_yaml", "OpenCV YAML"),
+    ("opencv_xml", "OpenCV XML, with per-image figures"),
     ("json", "JSON, with per-image detail"),
     ("ros", "ROS camera_info"),
     ("project", "Plumbline project"),
@@ -78,14 +81,29 @@ class ExportDialog(QDialog):
         self.grid.setHorizontalSpacing(16)
         self.grid.setVerticalSpacing(6)
         self._rows = {}
+        self._checks = {}
+        chosen = QSettings().value("export_formats", None)
+        chosen = set(chosen) if isinstance(chosen, (list, tuple)) else (
+            {chosen} if isinstance(chosen, str) and chosen else DEFAULT_FORMATS)
         for r, (key, what) in enumerate(KINDS):
+            tick = QCheckBox()
+            tick.setFixedWidth(20)
+            if key == "project":  # always written: it is what reopens the session
+                tick.setChecked(True)
+                tick.setEnabled(False)
+                tick.setToolTip("The project file is always saved.")
+            else:
+                tick.setChecked(key in chosen and not (key == "ros" and not self._ros))
+                tick.setEnabled(not (key == "ros" and not self._ros))
+                tick.toggled.connect(self._update)
             name = label("", font=T.mono(12, 600))
-            name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             note = label(what, "small")
-            self.grid.addWidget(name, r, 0)
-            self.grid.addWidget(note, r, 1, Qt.AlignmentFlag.AlignRight)
+            self.grid.addWidget(tick, r, 0)
+            self.grid.addWidget(name, r, 1)
+            self.grid.addWidget(note, r, 2, Qt.AlignmentFlag.AlignRight)
             self._rows[key] = (name, note, what)
-        self.grid.setColumnStretch(0, 1)
+            self._checks[key] = tick
+        self.grid.setColumnStretch(1, 1)
         v.addWidget(box)
         v.addSpacing(8)
         self.files_note = label("", "small", wrap=True)
@@ -123,14 +141,18 @@ class ExportDialog(QDialog):
     def revision(self) -> int:
         return self._revision
 
+    def formats(self) -> set[str]:
+        """Which files to write. The project file is always among them."""
+        return {k for k, box in self._checks.items() if box.isChecked()}
+
     def file_names(self) -> dict[str, str]:
         files = export_files(self.project_name, self._revision)
-        if not self._ros:
-            files.pop("ros")
-        return files
+        return {k: v for k, v in files.items() if k in self.formats()}
 
     def accept(self):
-        QSettings().setValue("export_folder", self.folder)
+        settings = QSettings()
+        settings.setValue("export_folder", self.folder)
+        settings.setValue("export_formats", sorted(self.formats() - {"project"}))
         super().accept()
 
     # -------------------------------------------------------------- private

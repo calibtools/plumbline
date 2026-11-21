@@ -37,6 +37,7 @@ def export_files(name: str, revision: int) -> dict[str, str]:
     return {
         "report": f"{stem}-report.pdf",
         "opencv_yaml": f"{stem}-camera.yml",
+        "opencv_xml": f"{stem}-camera.xml",
         "json": f"{stem}-camera.json",
         "ros": f"{stem}-camera_info.yaml",
         "project": f"{safe_name(name)}.plumbline",

@@ -555,25 +555,35 @@ class Workbench(QWidget):
         dialog = ExportDialog(self.project, self.result, self)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
-        self.export_to(dialog.folder, dialog.project_name)
+        self.export_to(dialog.folder, dialog.project_name, dialog.formats())
 
-    def export_to(self, folder: str, name: str | None = None):
-        """Write one revision: report, parameter files and the project file, all named after the project."""
+    def export_to(self, folder: str, name: str | None = None, formats: set[str] | None = None):
+        """Write one revision: the chosen files plus the project file, all named after the project."""
         base = Path(folder)
         if name:
             self.project.title = safe_name(name)
         name = self.project.name
+        formats = set(formats) if formats is not None else {"report", "opencv_yaml", "json", "ros"}
         signature = result_signature(self.result)
         revision = self.project.revision_for(signature)
         files = export_files(name, revision)
-        export.write_opencv_yaml(self.result, base / files["opencv_yaml"])
-        export.write_json(self.result, base / files["json"])
-        written = [files["opencv_yaml"], files["json"]]
-        if export.ros_distortion_model(self.result):
+        written = []
+        if "opencv_yaml" in formats:
+            export.write_opencv_yaml(self.result, base / files["opencv_yaml"])
+            written.append(files["opencv_yaml"])
+        if "opencv_xml" in formats:
+            export.write_opencv_xml(self.result, base / files["opencv_xml"])
+            written.append(files["opencv_xml"])
+        if "json" in formats:
+            export.write_json(self.result, base / files["json"])
+            written.append(files["json"])
+        if "ros" in formats and export.ros_distortion_model(self.result):
             export.write_ros_camera_info(self.result, base / files["ros"], safe_name(name))
             written.append(files["ros"])
-        write_report(self.result, self.project.detections, base / files["report"], name, revision)
-        written.append(files["report"])
+        if "report" in formats:
+            write_report(self.result, self.project.detections, base / files["report"], name, revision)
+            written.append(files["report"])
+        written.append(files["project"])
         self.project.revision, self.project.export_signature = revision, signature
         self.project.save(str(base / files["project"]))
         self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point)

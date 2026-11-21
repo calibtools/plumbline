@@ -62,6 +62,10 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert dialog.project_name == "line-3-leftcam"
     assert dialog.file_names()["opencv_yaml"] == "line-3-leftcam-camera.yml"
     assert "removed" in dialog.files_note.text()
+    assert "opencv_xml" not in dialog.formats() and "project" in dialog.formats()
+    dialog._checks["opencv_xml"].setChecked(True)
+    dialog._checks["json"].setChecked(False)
+    assert dialog.file_names()["opencv_xml"] == "line-3-leftcam-camera.xml" and "json" not in dialog.file_names()
     dialog.folder_edit.setText(str(tmp_path / "missing"))
     assert not dialog.ok.isEnabled()
     dialog.reject()
@@ -80,6 +84,12 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert pdf.startswith(b"%PDF")
     assert "camera_name: Sample-ChArUco" in (tmp_path / "Sample-ChArUco-camera_info.yaml").read_text()
     assert bench.project.revision == 1
+
+    # Only the ticked formats are written; XML is one of the choices.
+    (tmp_path / "x").mkdir()
+    bench.export_to(str(tmp_path / "x"), formats={"opencv_xml"})
+    assert sorted(p.name for p in (tmp_path / "x").iterdir()) == ["Sample-ChArUco-camera.xml", "Sample-ChArUco.plumbline"]
+    bench.project.path = str(tmp_path / "Sample-ChArUco.plumbline")
 
     # The same result again is the same revision: nothing new appears.
     bench.export_all()
