@@ -73,11 +73,12 @@ jobs:
         run: |
           hdiutil attach dist/installer/*.dmg -nobrowse -mountpoint /tmp/plumbline-dmg
           PLUMBLINE_SMOKE=1 /tmp/plumbline-dmg/Plumbline.app/Contents/MacOS/Plumbline | tee smoke.txt
-          hdiutil detach /tmp/plumbline-dmg
+          sleep 2
+          hdiutil detach /tmp/plumbline-dmg || hdiutil detach /tmp/plumbline-dmg -force
           grep -q SMOKE_OK smoke.txt
 
       # ------------------------------------------------------------------ Linux
-      - name: Linux AppImage (zstd) and tar.xz
+      - name: Linux AppImage (xz) and tar.xz
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/installer AppDir/usr/lib
@@ -87,8 +88,9 @@ jobs:
           cp src/plumbline/assets/app-icon.png AppDir/plumbline.png
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run --comp zstd \
-            --mksquashfs-opt -Xcompression-level --mksquashfs-opt 19 \
+          # xz packs this app about a quarter smaller than zstd; it starts a little slower.
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run --comp xz \
+            --mksquashfs-opt -Xdict-size --mksquashfs-opt 100% \
             AppDir "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.AppImage"
           tar -C dist -cf - Plumbline | xz -6 -T0 > "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.tar.xz"
       - name: Start the AppImage
