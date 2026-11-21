@@ -134,6 +134,29 @@ def main():
     win.grab().save(str(out / "12-circles-partly-outside.png"))
     bench.export_to(str(out), formats={"report"})
 
+    # A stock AprilGrid.
+    board = find_board("CT-APR-P-300X200-T36").target
+    rng = np.random.default_rng(1007)
+    folder = out / "aprilgrid-images"
+    folder.mkdir(exist_ok=True)
+    paths = []
+    for i, (r, t) in enumerate(synth.sample_poses(board, camera, 24)):
+        paths.append(str(folder / f"tags-{i + 1:02d}.png"))
+        cv2.imwrite(paths[-1], synth.render(board, camera, r, t, rng))
+    win.new_project()
+    bench.preset.setCurrentIndex(bench.preset.findData("CT-APR-P-300X200-T36"))
+    bench.tabs.setCurrentIndex(0)
+    pump(app, 0.2)
+    win.grab().save(str(out / "13-aprilgrid-target-tab.png"))
+    bench.add_images(paths)
+    wait_idle(app, win)
+    bench.tabs.setCurrentIndex(2)
+    bench.table.selectRow(1)
+    pump(app, 0.3)
+    win.grab().save(str(out / "14-aprilgrid-result.png"))
+    r = bench.result
+    print("APRILGRID views", len(r.views), "rms", round(r.rms_point, 4), "fx", round(r.fx, 2))
+
 
 if __name__ == "__main__":
     main()

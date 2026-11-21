@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from . import lens
-from .targets import CHARUCO, Target
+from .targets import APRILGRID, APRILGRID_BORDER_BITS, CHARUCO, Target
 
 PX_PER_MM = 8.0
 
@@ -53,6 +53,16 @@ def board_texture(target: Target, margin_squares: float = 1.0) -> tuple[np.ndarr
     origin = (margin_mm, margin_mm)
     if target.kind == CHARUCO:
         inner = target.charuco_board().generateImage((w, h), marginSize=0)
+    elif target.kind == APRILGRID:
+        inner = np.full((h, w), 255, np.uint8)
+        side = int(round(target.square_mm * PX_PER_MM))
+        dictionary = target.aruco_dictionary()
+        for t in range(target.marker_count):
+            x, y = target.tag_origin(t)
+            tag = cv2.aruco.generateImageMarker(dictionary, target.first_marker_id + t, side,
+                                                borderBits=APRILGRID_BORDER_BITS)
+            x0, y0 = int(round(x * PX_PER_MM)), int(round(y * PX_PER_MM))
+            inner[y0:y0 + side, x0:x0 + side] = tag[::-1, ::-1]  # turned by 180 degrees, as Kalibr prints them
     elif target.is_circles:
         r = target.circle_diameter_mm / 2
         origin = (margin_mm + r, margin_mm + r)

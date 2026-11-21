@@ -14,7 +14,9 @@ CHARUCO = "charuco"
 CHECKERBOARD = "checkerboard"
 CIRCLES = "circles"
 ASYMMETRIC_CIRCLES = "asymmetric_circles"
-KINDS = (CHARUCO, CHECKERBOARD, CIRCLES, ASYMMETRIC_CIRCLES)
+APRILGRID = "aprilgrid"
+KINDS = (CHARUCO, CHECKERBOARD, CIRCLES, ASYMMETRIC_CIRCLES, APRILGRID)
+APRILGRID_BORDER_BITS = 2  # Kalibr prints its tags with a black border two cells wide
 CIRCLE_KINDS = (CIRCLES, ASYMMETRIC_CIRCLES)
 DEFAULT_CIRCLE_RATIO = 0.56  # circle diameter over spacing when the diameter is not given
 
@@ -46,6 +48,13 @@ class Target:
     position. An asymmetric grid has one at every other position,
     checkerboard-wise: a lattice of R rows x C columns holds R rows of C / 2
     circles, which OpenCV calls pattern size (C / 2, R).
+
+    For an AprilGrid (Kalibr layout) squares_x / squares_y count tags,
+    square_mm is the tag size including its black border and marker_mm the
+    gap between neighbouring tags. The first ID is the bottom-left tag; IDs
+    run left to right and then upward, and every tag is printed turned by
+    180 degrees, as Kalibr does. The calibration points are the four outer
+    corners of every tag.
     """
 
     kind: str
@@ -71,6 +80,23 @@ class Target:
                                  "so that every row has the same number of circles")
             if self.marker_mm is not None and not 0 < self.marker_mm < self.square_mm:
                 raise ValueError("circle diameter must be positive and smaller than the spacing")
+            return
+        if self.kind == APRILGRID:
+            if self.squares_x < 2 or self.squares_y < 2:
+                raise ValueError("an AprilGrid needs at least 2 x 2 tags")
+            if self.square_mm <= 0:
+                raise ValueError("tag size must be positive")
+            if self.marker_mm is None or self.marker_mm <= 0:
+                raise ValueError("the gap between tags must be positive")
+            if self.dictionary not in DICTIONARIES or "APRILTAG" not in self.dictionary:
+                raise ValueError("an AprilGrid needs an AprilTag family, for example DICT_APRILTAG_36h11")
+            available = int(self.aruco_dictionary().bytesList.shape[0])
+            last = self.first_marker_id + self.marker_count - 1
+            if self.first_marker_id < 0 or last >= available:
+                raise ValueError(
+                    f"this board needs tag IDs {self.first_marker_id} to {last}, "
+                    f"but {self.dictionary} only has IDs 0 to {available - 1}"
+                )
             return
         if self.squares_x < 3 or self.squares_y < 3:
             raise ValueError("a target needs at least 3 x 3 squares")
@@ -112,8 +138,20 @@ class Target:
 
     @property
     def corner_count(self) -> int:
+        if self.kind == APRILGRID:
+            return 4 * self.marker_count
         cols, rows = self.opencv_size
         return cols * rows
+
+    @property
+    def tag_step_mm(self) -> float:
+        """Distance from one tag of an AprilGrid to the next: tag size plus gap."""
+        return self.square_mm + float(self.marker_mm)
+
+    def tag_origin(self, index: int) -> tuple[float, float]:
+        """Top-left corner of the tag with the given position in ID order (0 = first ID)."""
+        row, col = divmod(index, self.squares_x)  # row 0 is the bottom row
+        return (col * self.tag_step_mm, (self.squares_y - 1 - row) * self.tag_step_mm)
 
     @property
     def circle_diameter_mm(self) -> float:
@@ -129,6 +167,8 @@ class Target:
     @property
     def marker_count(self) -> int:
         """Markers on a ChArUco board: one in every white square."""
+        if self.kind == APRILGRID:
+            return self.squares_x * self.squares_y
         if self.kind != CHARUCO:
             return 0
         return (self.squares_x * self.squares_y) // 2
@@ -138,12 +178,16 @@ class Target:
         """Width of the printed pattern, without any margin."""
         if self.is_circles:
             return (self.squares_x - 1) * self.square_mm + self.circle_diameter_mm
+        if self.kind == APRILGRID:
+            return (self.squares_x - 1) * self.tag_step_mm + self.square_mm
         return self.squares_x * self.square_mm
 
     @property
     def height_mm(self) -> float:
         if self.is_circles:
             return (self.squares_y - 1) * self.square_mm + self.circle_diameter_mm
+        if self.kind == APRILGRID:
+            return (self.squares_y - 1) * self.tag_step_mm + self.square_mm
         return self.squares_y * self.square_mm
 
     @property
@@ -156,7 +200,23 @@ class Target:
     def object_points(self) -> np.ndarray:
         if self.is_circles:
             return self._circle_points()
+        if self.kind == APRILGRID:
+            return self._tag_points()
         return self._corner_points()
+
+    def _tag_points(self) -> np.ndarray:
+        """(4 N, 3) tag corners. Point 4 t + k is corner k of the tag with ID first_marker_id + t.
+
+        The origin is the top-left corner of the block of tags, x to the right,
+        y down. Corner k follows the order OpenCV's marker detector returns for
+        a tag printed the Kalibr way: bottom-right, bottom-left, top-left, top-right.
+        """
+        s = self.square_mm
+        pts = np.zeros((self.corner_count, 3), np.float32)
+        for t in range(self.marker_count):
+            x, y = self.tag_origin(t)
+            pts[4 * t: 4 * t + 4, :2] = ((x + s, y + s), (x, y + s), (x, y), (x + s, y))
+        return pts
 
     def _circle_points(self) -> np.ndarray:
         """(N, 3) circle centres in the order OpenCV's findCirclesGrid returns them.
@@ -190,8 +250,8 @@ class Target:
         return pts
 
     def aruco_dictionary(self):
-        if self.kind != CHARUCO:
-            raise ValueError("only ChArUco targets have a dictionary")
+        if self.kind not in (CHARUCO, APRILGRID):
+            raise ValueError("only ChArUco and AprilGrid targets have a dictionary")
         return cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, self.dictionary))
 
     def charuco_board(self):
@@ -214,6 +274,8 @@ class Target:
             return self.part_number
         if self.kind == CHARUCO:
             return f"ChArUco {self.squares_x} x {self.squares_y}"
+        if self.kind == APRILGRID:
+            return f"AprilGrid {self.squares_x} x {self.squares_y}"
         if self.kind == CIRCLES:
             return f"Circles {self.squares_x} x {self.squares_y}"
         if self.kind == ASYMMETRIC_CIRCLES:
@@ -231,6 +293,12 @@ class Target:
                 f"ChArUco {self.squares_x} x {self.squares_y}, "
                 f"{self.square_mm:g} / {self.marker_mm:g} mm, {self.dictionary}"
             )
+            if self.first_marker_id:
+                text += f", IDs from {self.first_marker_id}"
+            return text
+        if self.kind == APRILGRID:
+            text = (f"AprilGrid {self.squares_x} x {self.squares_y} tags, "
+                    f"{self.square_mm:g} mm tags, {self.marker_mm:g} mm gap, {self.dictionary}")
             if self.first_marker_id:
                 text += f", IDs from {self.first_marker_id}"
             return text
