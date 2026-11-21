@@ -139,7 +139,7 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
     y += 16
     h1 = _text(p, M, y, W / 2, f"{r.rms_point:.3f} px", T.mono(32, 600))
     _text(p, M + W / 2 + 12, y + 2, W / 2 - 12,
-          f"{len(r.views)} of {len(detections)} used  ·  {r.corner_total:,} corners", T.mono(13, 600))
+          f"{len(r.views)} of {len(detections)} used  ·  {r.corner_total:,} {r.target.point_word}", T.mono(13, 600))
     _text(p, M + W / 2 + 12, y + 22, W / 2 - 12,
           f"{len(r.excluded)} excluded by the user  ·  {len(r.skipped)} without a usable detection",
           T.sans(11), T.INK_MUTED, wrap=True)
@@ -190,14 +190,14 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
                "a number above a bar means it runs off the scale.", T.sans(10), T.INK_MUTED) + 20
 
     # Coverage and findings side by side.
-    _eyebrow(p, M, y, "Corner coverage")
+    _eyebrow(p, M, y, "Coverage")
     fx0 = M + 300
     _eyebrow(p, fx0, y, "Findings")
     y += 16
     active = [d for i, d in enumerate(detections) if i in by_index]
     grid, share = coverage_grid(active, r.image_width, r.image_height)
     _coverage(p, QRectF(M, y, 256, 160), grid)
-    _text(p, M, y + 166, 280, f"{share * 100:.0f} % of the image has corners. Dark: many. Light: few. "
+    _text(p, M, y + 166, 280, f"{share * 100:.0f} % of the image is covered. Dark: many. Light: few. "
           "Red outline: none.", T.sans(10), T.INK_MUTED, wrap=True)
     fy = y
     for tag, text in findings(r, share):
@@ -212,7 +212,7 @@ def _table_page(p, rows, project_name, page, pages) -> None:
     _eyebrow(p, M, y, "Images")
     y += 18
     # title, left edge and width as shares of the table width, alignment
-    cols = [("File", 0.00, 0.40, Qt.AlignmentFlag.AlignLeft), ("Corners", 0.40, 0.12, Qt.AlignmentFlag.AlignRight),
+    cols = [("File", 0.00, 0.40, Qt.AlignmentFlag.AlignLeft), ("Points", 0.40, 0.12, Qt.AlignmentFlag.AlignRight),
             ("RMS, px", 0.52, 0.14, Qt.AlignmentFlag.AlignRight), ("Max, px", 0.66, 0.14, Qt.AlignmentFlag.AlignRight),
             ("Status", 0.84, 0.16, Qt.AlignmentFlag.AlignLeft)]
     row_h = 23.0

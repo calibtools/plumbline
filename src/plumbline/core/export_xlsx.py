@@ -58,7 +58,7 @@ def write_xlsx(
         ("Images used", len(r.views), "0"),
         ("Images excluded by the user", len(r.excluded), "0"),
         ("Images without a usable detection", len(r.skipped), "0"),
-        ("Corners used", r.corner_total, "0"),
+        (f"{r.target.point_word.capitalize()} used", r.corner_total, "0"),
         ("fx, px", r.fx, "0.0000"),
         ("fy, px", r.fy, "0.0000"),
         ("cx, px", r.cx, "0.0000"),

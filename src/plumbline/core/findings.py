@@ -16,6 +16,7 @@ PASS, CHECK, NOTE = "PASS", "CHECK", "NOTE"
 def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str, str]]:
     """(tag, sentence) pairs, most important first."""
     r = result
+    word = r.target.point_word.capitalize()
     out: list[tuple[str, str]] = []
     if r.rms_point <= GOOD_RMS:
         out.append((PASS, f"Error is low ({r.rms_point:.2f} px)."))
@@ -29,10 +30,10 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
         out.append((CHECK, f"{names} stand well above the rest. Look at them; a lower error "
                            "after excluding an image does not by itself mean a better result."))
     if coverage_share < 0.7:
-        out.append((CHECK, f"Corners cover {coverage_share * 100:.0f} % of the image. "
+        out.append((CHECK, f"{word} cover {coverage_share * 100:.0f} % of the image. "
                            "Add views that reach the empty cells in the coverage map."))
     else:
-        out.append((PASS, f"Corners cover {coverage_share * 100:.0f} % of the image."))
+        out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
     if len(r.views) < 10:
         out.append((NOTE, f"Only {len(r.views)} images in use. 15 to 30 give a steadier result."))
     if r.excluded:

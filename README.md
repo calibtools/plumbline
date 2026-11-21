@@ -7,7 +7,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 ## What works now
 
 - One camera at a time
-- Targets: ChArUco and checkerboard
+- Targets: ChArUco, checkerboard, circle grid and asymmetric circle grid
 - OpenCV standard lens model (optional k3, tangential, rational and thin prism terms)
 - OpenCV fisheye lens model (k1 to k4) for wide lenses
 - Corrected view: any image with the lens distortion of the result removed
@@ -18,7 +18,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Calib.Tools boards by part number: pick one and the pattern settings fill in
 - Project files, built-in sample images
 
-Not yet: signed installers, more patterns, other wide-lens models, uncertainty, several cameras.
+Not yet: signed installers, AprilGrid and ArUco grids, other wide-lens models, uncertainty, several cameras.
 
 Every result so far has been checked with rendered images only. Checks with photographs of real boards are still to come.
 
@@ -30,6 +30,8 @@ The test suite renders images of a target through a camera whose parameters are 
 calibration recovers that camera, for a standard lens and for a fisheye lens. Run it with `pytest`.
 
 The error figure shown is the RMS per point, `sqrt(mean(dx² + dy²))`, which is what OpenCV reports.
+Circle grids: the centre of a tilted circle's image is not exactly the image of its centre. Plumbline does not correct for this yet; in the tests the effect stays below a quarter of a pixel.
+
 Some tools count x and y separately; that figure is smaller by a factor of √2. Exports carry both.
 
 ## Run from source

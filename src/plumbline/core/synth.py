@@ -40,14 +40,29 @@ def fisheye_camera() -> Camera:
     return Camera(1280, 960, K, dist, True)
 
 
-def board_texture(target: Target, margin_squares: float = 1.0) -> tuple[np.ndarray, float]:
-    """Flat image of the target with a white margin. Returns (image, margin in mm)."""
+def board_texture(target: Target, margin_squares: float = 1.0) -> tuple[np.ndarray, tuple[float, float]]:
+    """Flat image of the target with a white margin.
+
+    Returns (image, origin): where the origin of object_points() sits in the
+    image, in mm from its top-left corner.
+    """
     margin_mm = margin_squares * target.square_mm
     w = int(round(target.width_mm * PX_PER_MM))
     h = int(round(target.height_mm * PX_PER_MM))
     m = int(round(margin_mm * PX_PER_MM))
+    origin = (margin_mm, margin_mm)
     if target.kind == CHARUCO:
         inner = target.charuco_board().generateImage((w, h), marginSize=0)
+    elif target.is_circles:
+        r = target.circle_diameter_mm / 2
+        origin = (margin_mm + r, margin_mm + r)
+        inner = np.full((h, w), 255, np.uint8)
+        shift = 6  # sub-pixel circle centres and radius
+        for x, y, _z in target.object_points():
+            cx = (x + r) * PX_PER_MM - 0.5
+            cy = (y + r) * PX_PER_MM - 0.5
+            cv2.circle(inner, (int(round(cx * 2**shift)), int(round(cy * 2**shift))),
+                       int(round(r * PX_PER_MM * 2**shift)), 0, -1, cv2.LINE_AA, shift)
     else:
         inner = np.full((h, w), 255, np.uint8)
         sq = target.square_mm * PX_PER_MM
@@ -59,7 +74,7 @@ def board_texture(target: Target, margin_squares: float = 1.0) -> tuple[np.ndarr
                     inner[y0:y1, x0:x1] = 0
     tex = np.full((h + 2 * m, w + 2 * m), 255, np.uint8)
     tex[m : m + h, m : m + w] = inner
-    return tex, margin_mm
+    return tex, origin
 
 
 def render(
@@ -73,8 +88,8 @@ def render(
     background: int = 120,
 ) -> np.ndarray:
     """Render the target at pose (rvec, tvec), board frame to camera frame, mm."""
-    tex, margin_mm = board_texture(target)
-    return render_texture(tex, PX_PER_MM, (margin_mm, margin_mm), camera, rvec, tvec,
+    tex, origin = board_texture(target)
+    return render_texture(tex, PX_PER_MM, origin, camera, rvec, tvec,
                           rng=rng, noise_sigma=noise_sigma, blur=blur, background=background)
 
 
@@ -156,7 +171,7 @@ def sample_poses(
     """Poses that spread the board over the image at varied tilts and distances."""
     rng = np.random.default_rng(seed)
     f = float(camera.K[0, 0])
-    centre = np.array([target.width_mm / 2, target.height_mm / 2, 0.0])
+    centre = np.array([*target.centre_mm, 0.0])
     poses = []
     for i in range(count):
         # Distance at which the board fills 45 to 80 percent of the image width.
