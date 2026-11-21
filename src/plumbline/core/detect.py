@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .targets import APRILGRID, APRILGRID_BORDER_BITS, ASYMMETRIC_CIRCLES, CHARUCO, Target
+from .targets import APRILGRID, ASYMMETRIC_CIRCLES, CHARUCO, MARKER_GRIDS, Target
 
 # A view needs enough corners to constrain its pose well.
 MIN_CORNERS = 8
@@ -71,8 +71,8 @@ def detect(gray: np.ndarray, target: Target, path: str = "") -> Detection:
     det = Detection(path=path, width=w, height=h)
     if target.kind == CHARUCO:
         _detect_charuco(gray, target, det)
-    elif target.kind == APRILGRID:
-        _detect_aprilgrid(gray, target, det)
+    elif target.kind in MARKER_GRIDS:
+        _detect_marker_grid(gray, target, det)
     elif target.is_circles:
         _detect_circles(gray, target, det)
     else:
@@ -152,12 +152,15 @@ def _detect_circles(gray: np.ndarray, target: Target, det: Detection) -> None:
     det.corners = centres
 
 
-def _detect_aprilgrid(gray: np.ndarray, target: Target, det: Detection) -> None:
-    """Tags of an AprilGrid; every tag found gives its four outer corners. Part of the grid is enough."""
+def _detect_marker_grid(gray: np.ndarray, target: Target, det: Detection) -> None:
+    """Tags of an AprilGrid or markers of an ArUco grid; each one found gives its four outer corners.
+
+    Part of the grid in the image is enough.
+    """
     dictionary = target.aruco_dictionary()
     found_ids, found_corners = None, None
     # Kalibr's border is two cells wide; plain AprilTag prints use one.
-    for border in (APRILGRID_BORDER_BITS, 1):
+    for border in ((target.border_bits, 1) if target.kind == APRILGRID else (1,)):
         params = cv2.aruco.DetectorParameters()
         params.markerBorderBits = border
         params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
@@ -172,8 +175,9 @@ def _detect_aprilgrid(gray: np.ndarray, target: Target, det: Detection) -> None:
             for i, c in zip(found_ids, found_corners) if first <= int(i) < first + count]
     if not keep:
         lo, hi = int(found_ids.min()), int(found_ids.max())
-        det.note = (f"The tags in this image have IDs {lo} to {hi}, but the target is set to "
-                    f"IDs {first} to {first + count - 1}. Check First tag ID and the number of tags.")
+        one = "tag" if target.kind == APRILGRID else "marker"
+        det.note = (f"The {one}s in this image have IDs {lo} to {hi}, but the target is set to "
+                    f"IDs {first} to {first + count - 1}. Check First {one} ID and the number of {one}s.")
         return
     keep.sort(key=lambda item: item[0])
     keep = [(t, refine_tag_corners(gray, c)) for t, c in keep]

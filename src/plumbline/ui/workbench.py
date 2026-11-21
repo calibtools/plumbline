@@ -26,7 +26,7 @@ from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
 from ..core.targets import (
-    APRILGRID, ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, Target,
+    APRILGRID, ARUCO_GRID, ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, MARKER_GRIDS, Target,
 )
 from . import theme as T
 from .export_dialog import ExportDialog
@@ -285,6 +285,7 @@ class Workbench(QWidget):
         self.kind.addItem("Circle grid", CIRCLES)
         self.kind.addItem("Asymmetric circles", ASYMMETRIC_CIRCLES)
         self.kind.addItem("AprilGrid", APRILGRID)
+        self.kind.addItem("ArUco grid", ARUCO_GRID)
         self._last_kind = CHARUCO
         self.sx, self.sy = QSpinBox(), QSpinBox()
         for s, val in ((self.sx, 11), (self.sy, 8)):
@@ -460,7 +461,7 @@ class Workbench(QWidget):
         self.sx.setValue(t.squares_x)
         self.sy.setValue(t.squares_y)
         self.square.setValue(t.square_mm)
-        if t.kind in (CHARUCO, APRILGRID):
+        if t.kind in (CHARUCO, *MARKER_GRIDS):
             self.marker.setValue(t.marker_mm)
             self.dictionary.setCurrentText(t.dictionary)
             self.legacy.setChecked(t.legacy_pattern)
@@ -476,8 +477,8 @@ class Workbench(QWidget):
                 target = Target(CHARUCO, self.sx.value(), self.sy.value(), self.square.value(),
                                 self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked(),
                                 first_marker_id=self.first_id.value())
-            elif kind == APRILGRID:
-                target = Target(APRILGRID, self.sx.value(), self.sy.value(), self.square.value(),
+            elif kind in MARKER_GRIDS:
+                target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
                                 self.marker.value(), self.dictionary.currentText(),
                                 first_marker_id=self.first_id.value())
             else:
@@ -502,7 +503,7 @@ class Workbench(QWidget):
     def _target_changed(self, *_):
         kind = self.kind.currentData()
         charuco = kind == CHARUCO
-        tags = kind in (CHARUCO, APRILGRID)
+        tags = kind in (CHARUCO, *MARKER_GRIDS)
         if kind != self._last_kind and tags:
             # ChArUco boards and AprilGrids use different marker families; start from the usual one.
             april = "APRILTAG" in self.dictionary.currentText()
@@ -511,9 +512,14 @@ class Workbench(QWidget):
                 self.dictionary.setCurrentText("DICT_APRILTAG_36h11" if kind == APRILGRID else "DICT_5X5_250")
                 self.dictionary.blockSignals(False)
         self._last_kind = kind
-        self.marker_label.setText("Tag gap" if kind == APRILGRID else "Marker size")
+        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap"}.get(kind, "Marker size"))
         self.first_id_label.setText("First tag ID" if kind == APRILGRID else "First marker ID")
-        if kind == APRILGRID:
+        if kind == ARUCO_GRID:
+            names = ("Markers across", "Markers down", "Marker size")
+            note = ("Measure a marker across its black border, and the white gap to the next marker. "
+                    "IDs run from the top-left marker to the right and then downward, as OpenCV's GridBoard "
+                    "lays them out. Part of the grid in the image is enough.")
+        elif kind == APRILGRID:
             names = ("Tags across", "Tags down", "Tag size")
             note = ("Measure a tag across its black border, and the white gap to the next tag. "
                     "IDs run from the bottom-left tag to the right and then upward, as Kalibr lays them out. "
@@ -549,10 +555,11 @@ class Workbench(QWidget):
             self.preset_link.set_url(T.site_url("/targets/", "target-custom"))
         if target is not None:
             self.target_hint.setStyleSheet("")
-            if target.kind == APRILGRID:
+            if target.kind in MARKER_GRIDS:
+                one = "tag" if target.kind == APRILGRID else "marker"
                 self.target_hint.setText(
-                    f"{target.marker_count} tags, {target.corner_count} corners, "
-                    f"pattern {target.width_mm:g} x {target.height_mm:g} mm, tag IDs {target.first_marker_id} "
+                    f"{target.marker_count} {one}s, {target.corner_count} corners, "
+                    f"pattern {target.width_mm:g} x {target.height_mm:g} mm, {one} IDs {target.first_marker_id} "
                     f"to {target.first_marker_id + target.marker_count - 1}."
                 )
             elif target.is_circles:
