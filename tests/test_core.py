@@ -155,3 +155,22 @@ def test_project_round_trip(tmp_path, charuco, charuco_set):
     assert q.target == charuco and q.excluded == {2} and q.name == "bench"
     a, b = calibrate(dets, charuco, excluded={2}), calibrate(q.detections, q.target, excluded=q.excluded)
     assert np.allclose(a.camera_matrix, b.camera_matrix, rtol=1e-6)
+
+
+def test_boards_of_a_set_are_told_apart_by_their_marker_ids(camera):
+    """Board 3 of a set continues the numbering. Only the matching settings find it."""
+    first = Target(CHARUCO, 12, 9, 60.0, 45.0, "DICT_5X5_1000")
+    third = Target(CHARUCO, 12, 9, 60.0, 45.0, "DICT_5X5_1000", first_marker_id=108)
+    assert first.marker_count == 54
+    assert list(np.asarray(third.charuco_board().getIds()).reshape(-1)[[0, -1]]) == [108, 161]
+    r, t = synth.sample_poses(third, camera, 1, seed=5)[0]
+    image = synth.render(third, camera, r, t, np.random.default_rng(5))
+    from plumbline.core.detect import detect
+    right, wrong = detect(image, third), detect(image, first)
+    assert right.count > 40
+    truth = synth.true_corners(third, camera, r, t)[right.ids]
+    assert np.median(np.linalg.norm(right.corners - truth, axis=1)) < 0.2
+    assert wrong.count == 0
+    assert "IDs 108 to 161" in wrong.note and "First marker ID 108" in wrong.note
+    with pytest.raises(ValueError, match="only has IDs"):
+        Target(CHARUCO, 12, 9, 60.0, 45.0, "DICT_5X5_50")

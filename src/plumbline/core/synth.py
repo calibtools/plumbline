@@ -65,11 +65,37 @@ def render(
 ) -> np.ndarray:
     """Render the target at pose (rvec, tvec), board frame to camera frame, mm."""
     tex, margin_mm = board_texture(target)
+    return render_texture(tex, PX_PER_MM, (margin_mm, margin_mm), camera, rvec, tvec,
+                          rng=rng, noise_sigma=noise_sigma, blur=blur, background=background)
+
+
+def render_texture(
+    tex: np.ndarray,
+    px_per_mm: float,
+    origin_mm: tuple[float, float],
+    camera: Camera,
+    rvec: np.ndarray,
+    tvec: np.ndarray,
+    rng: np.random.Generator | None = None,
+    noise_sigma: float = 2.0,
+    blur: float = 0.8,
+    background: int = 120,
+    shading: float = 0.0,
+    black: int = 0,
+    white: int = 255,
+) -> np.ndarray:
+    """Render any flat picture of a target, for example the print file of a real board.
+
+    origin_mm is where the pattern's origin (outer corner of the first square)
+    sits in the picture, measured from the picture's top-left corner.
+    shading adds uneven lighting and vignetting (0 = none, 0.4 = strong);
+    black and white set the grey levels the print reaches in the image.
+    """
     R, _ = cv2.Rodrigues(np.asarray(rvec, np.float64))
     t = np.asarray(tvec, np.float64).reshape(3)
     # The texture is finer than the output image; blur it first so that
     # bilinear sampling does not alias.
-    minification = PX_PER_MM * float(t[2]) / float(camera.K[0, 0])
+    minification = px_per_mm * float(t[2]) / float(camera.K[0, 0])
     if minification > 1.0:
         tex = cv2.GaussianBlur(tex, (0, 0), 0.5 * minification)
 
@@ -86,8 +112,8 @@ def render(
         s = (t @ n) / denom
     P = d * s[:, None]
     p = (P - t) @ R  # R^T (P - t)
-    map_x = ((p[:, 0] + margin_mm) * PX_PER_MM - 0.5).astype(np.float32)
-    map_y = ((p[:, 1] + margin_mm) * PX_PER_MM - 0.5).astype(np.float32)
+    map_x = ((p[:, 0] + origin_mm[0]) * px_per_mm - 0.5).astype(np.float32)
+    map_y = ((p[:, 1] + origin_mm[1]) * px_per_mm - 0.5).astype(np.float32)
     bad = ~np.isfinite(s) | (s <= 0)
     map_x[bad] = -10
     map_y[bad] = -10
@@ -99,13 +125,21 @@ def render(
         cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=background,
-    )
+    ).astype(np.float32)
+    if black != 0 or white != 255:
+        img = black + img * (white - black) / 255.0
+    if shading > 0:
+        xx = (u - camera.width / 2) / (camera.width / 2)
+        yy = (v - camera.height / 2) / (camera.height / 2)
+        angle = rng.uniform(0, 2 * np.pi) if rng is not None else 0.7
+        gradient = 1.0 + shading * 0.5 * (np.cos(angle) * xx + np.sin(angle) * yy)
+        vignette = 1.0 - shading * 0.5 * (xx**2 + yy**2) / 2.0
+        img = img * gradient * vignette
     if blur > 0:
         img = cv2.GaussianBlur(img, (0, 0), blur)
     if rng is not None and noise_sigma > 0:
-        noisy = img.astype(np.float32) + rng.normal(0, noise_sigma, img.shape)
-        img = np.clip(noisy, 0, 255).astype(np.uint8)
-    return img
+        img = img + rng.normal(0, noise_sigma, img.shape)
+    return np.clip(img, 0, 255).astype(np.uint8)
 
 
 def sample_poses(

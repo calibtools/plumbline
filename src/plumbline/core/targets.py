@@ -44,6 +44,7 @@ class Target:
     dictionary: str | None = None
     legacy_pattern: bool = False
     part_number: str | None = None
+    first_marker_id: int = 0  # boards in a set often continue the numbering of the board before
 
     def __post_init__(self) -> None:
         if self.kind not in (CHARUCO, CHECKERBOARD):
@@ -57,6 +58,13 @@ class Target:
                 raise ValueError(f"unknown dictionary: {self.dictionary}")
             if not self.marker_mm or not 0 < self.marker_mm < self.square_mm:
                 raise ValueError("marker size must be positive and smaller than the square")
+            available = int(self.aruco_dictionary().bytesList.shape[0])
+            last = self.first_marker_id + self.marker_count - 1
+            if self.first_marker_id < 0 or last >= available:
+                raise ValueError(
+                    f"this board needs marker IDs {self.first_marker_id} to {last}, "
+                    f"but {self.dictionary} only has IDs 0 to {available - 1}"
+                )
 
     @property
     def inner_cols(self) -> int:
@@ -69,6 +77,13 @@ class Target:
     @property
     def corner_count(self) -> int:
         return self.inner_cols * self.inner_rows
+
+    @property
+    def marker_count(self) -> int:
+        """Markers on a ChArUco board: one in every white square."""
+        if self.kind != CHARUCO:
+            return 0
+        return (self.squares_x * self.squares_y) // 2
 
     @property
     def width_mm(self) -> float:
@@ -98,11 +113,13 @@ class Target:
         return cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, self.dictionary))
 
     def charuco_board(self):
+        ids = np.arange(self.first_marker_id, self.first_marker_id + self.marker_count, dtype=np.int32)
         board = cv2.aruco.CharucoBoard(
             (self.squares_x, self.squares_y),
             float(self.square_mm),
             float(self.marker_mm),
             self.aruco_dictionary(),
+            ids,
         )
         if self.legacy_pattern:
             board.setLegacyPattern(True)
@@ -110,10 +127,13 @@ class Target:
 
     def describe(self) -> str:
         if self.kind == CHARUCO:
-            return (
+            text = (
                 f"ChArUco {self.squares_x} x {self.squares_y}, "
                 f"{self.square_mm:g} / {self.marker_mm:g} mm, {self.dictionary}"
             )
+            if self.first_marker_id:
+                text += f", IDs from {self.first_marker_id}"
+            return text
         return (
             f"Checkerboard {self.inner_cols} x {self.inner_rows} inner corners, "
             f"{self.square_mm:g} mm"

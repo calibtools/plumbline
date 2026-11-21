@@ -255,6 +255,10 @@ class Workbench(QWidget):
             s.setDecimals(3)
             s.setSuffix(" mm")
             s.setValue(val)
+        self.first_id = QSpinBox()
+        self.first_id.setRange(0, 9999)
+        self.first_id.setToolTip("Boards in a set often continue the numbering: board 2 starts where board 1 ends.")
+        self.first_id_label = label("First marker ID")
         self.dictionary = QComboBox()
         self.dictionary.addItems(DICTIONARIES)
         self.dictionary.setCurrentText("DICT_5X5_250")
@@ -262,9 +266,9 @@ class Workbench(QWidget):
         self.legacy.setToolTip("Tick this for ChArUco boards laid out the way OpenCV did before version 4.6.")
         self.marker_label = label("Marker size")
         self.dict_label = label("Dictionary")
-        for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary):
+        for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.first_id):
             wdg.setFixedHeight(36)
-        for wdg in (self.sx, self.sy, self.square, self.marker):
+        for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
             wdg.lineEdit().setTextMargins(7, 0, 0, 0)  # line the text up with the combo boxes
         form.addRow(label("Pattern"), self.kind)
         form.addRow(label("Squares across"), self.sx)
@@ -272,6 +276,7 @@ class Workbench(QWidget):
         form.addRow(label("Square size"), self.square)
         form.addRow(self.marker_label, self.marker)
         form.addRow(self.dict_label, self.dictionary)
+        form.addRow(self.first_id_label, self.first_id)
         v.addLayout(form)
         v.addWidget(self.legacy)
         self.target_hint = label("", "small", wrap=True)
@@ -283,7 +288,7 @@ class Workbench(QWidget):
         v.addWidget(LinkLabel("Find your board on Calib.Tools ↗", T.SITE))
         for wdg in (self.kind, self.dictionary):
             wdg.currentIndexChanged.connect(self._target_changed)
-        for wdg in (self.sx, self.sy, self.square, self.marker):
+        for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
             wdg.valueChanged.connect(self._target_changed)
         self.legacy.toggled.connect(self._target_changed)
         return w
@@ -381,7 +386,8 @@ class Workbench(QWidget):
         try:
             if kind == CHARUCO:
                 return Target(CHARUCO, self.sx.value(), self.sy.value(), self.square.value(),
-                              self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked())
+                              self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked(),
+                              first_marker_id=self.first_id.value())
             return Target(CHECKERBOARD, self.sx.value(), self.sy.value(), self.square.value())
         except ValueError as exc:
             self.target_hint.setText(str(exc).capitalize() + ".")
@@ -396,14 +402,17 @@ class Workbench(QWidget):
 
     def _target_changed(self, *_):
         charuco = self.kind.currentData() == CHARUCO
-        for wdg in (self.marker, self.dictionary, self.legacy, self.marker_label, self.dict_label):
+        for wdg in (self.marker, self.dictionary, self.legacy, self.marker_label, self.dict_label,
+                    self.first_id, self.first_id_label):
             wdg.setVisible(charuco)
         target = self.current_target()
         if target is not None:
             self.target_hint.setStyleSheet("")
             self.target_hint.setText(
                 f"{target.inner_cols} x {target.inner_rows} inner corners, "
-                f"pattern {target.width_mm:g} x {target.height_mm:g} mm."
+                f"pattern {target.width_mm:g} x {target.height_mm:g} mm"
+                + (f", marker IDs {target.first_marker_id} to "
+                   f"{target.first_marker_id + target.marker_count - 1}." if target.kind == CHARUCO else ".")
             )
         if target != self.project.target:
             self.project.target = target
@@ -427,7 +436,7 @@ class Workbench(QWidget):
         self.result = None
         t = project.target
         if t is not None:
-            for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy):
+            for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id):
                 wdg.blockSignals(True)
             self.kind.setCurrentIndex(0 if t.kind == CHARUCO else 1)
             self.sx.setValue(t.squares_x)
@@ -437,7 +446,8 @@ class Workbench(QWidget):
                 self.marker.setValue(t.marker_mm)
                 self.dictionary.setCurrentText(t.dictionary)
                 self.legacy.setChecked(t.legacy_pattern)
-            for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy):
+                self.first_id.setValue(t.first_marker_id)
+            for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id):
                 wdg.blockSignals(False)
         o = project.options
         for box, val in ((self.opt_k3, o.k3), (self.opt_tangential, o.tangential),
@@ -499,6 +509,8 @@ class Workbench(QWidget):
             self.result = None
             good = sum(d.usable for d in dets)
             self._say(f"Detection finished: {good} of {len(dets)} images usable.")
+            if not good:
+                self.tabs.setCurrentIndex(0)  # nothing found: the target settings are the first suspect
             self._refresh()
             if good:
                 self.run_calibration()

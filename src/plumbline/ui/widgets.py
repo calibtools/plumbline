@@ -291,7 +291,7 @@ class ImageView(QWidget):
             p.drawText(self.rect().adjusted(40, 0, -40, 0),
                        Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self._message)
             return
-        pad, cap = 16, 26
+        pad, cap = 16, 44  # room for a two-line caption
         avail = QRectF(pad, pad, self.width() - 2 * pad, self.height() - 2 * pad - cap)
         s = min(avail.width() / self._pix.width(), avail.height() / self._pix.height())
         w, h = self._pix.width() * s, self._pix.height() * s
@@ -313,5 +313,5 @@ class ImageView(QWidget):
                 p.drawLine(pt, QPointF(pt.x() + dx * RESIDUAL_GAIN * s, pt.y() + dy * RESIDUAL_GAIN * s))
         p.setPen(QColor(T.INK_MUTED))
         p.setFont(T.mono(12))
-        p.drawText(QRectF(pad, self.height() - pad - 16, self.width() - 2 * pad, 16),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._caption)
+        p.drawText(QRectF(pad, self.height() - pad - 34, self.width() - 2 * pad, 36),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, self._caption)

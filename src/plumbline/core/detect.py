@@ -89,13 +89,24 @@ def detect_file(path: str, target: Target) -> Detection:
 
 def _detect_charuco(gray: np.ndarray, target: Target, det: Detection) -> None:
     detector = cv2.aruco.CharucoDetector(target.charuco_board())
-    corners, ids, marker_corners, _marker_ids = detector.detectBoard(gray)
+    corners, ids, marker_corners, marker_ids = detector.detectBoard(gray)
     if ids is None or len(ids) == 0:
-        if marker_corners is not None and len(marker_corners) > 0:
-            det.note = (
-                f"{len(marker_corners)} markers found but no board corners. "
-                "Check the square count, the dictionary and the pattern layout."
-            )
+        if marker_ids is not None and len(marker_ids) > 0:
+            seen = np.asarray(marker_ids).reshape(-1)
+            lo, hi = int(seen.min()), int(seen.max())
+            first = target.first_marker_id
+            last = first + target.marker_count - 1
+            if hi < first or lo > last:
+                det.note = (
+                    f"The markers in this image have IDs {lo} to {hi}, but the target is set to "
+                    f"IDs {first} to {last}. This looks like another board of a set: "
+                    f"try First marker ID {lo - lo % target.marker_count}."
+                )
+            else:
+                det.note = (
+                    f"{len(seen)} markers found but no board corners. "
+                    "Check the square count, the sizes and the pattern layout."
+                )
         return
     det.ids = np.asarray(ids, np.int32).reshape(-1)
     det.corners = np.asarray(corners, np.float32).reshape(-1, 2)
