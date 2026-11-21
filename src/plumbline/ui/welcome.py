@@ -214,11 +214,11 @@ class WelcomePage(QWidget):
         cards.setSpacing(12)
         data = [
             ("No board yet?", "Print a ChArUco or checkerboard pattern. Fine for a first try.",
-             "Open the pattern generator", T.SITE + "/tools/"),
+             "Open the pattern generator", T.site_url("/tools/", "start-no-board")),
             ("Which size?", "The board should fill most of the frame at your working distance.",
-             "Check size for your lens", T.SITE + "/tools/"),
-            ("Have a Calib.Tools board?", "Enter its square count, sizes and dictionary from the label or data sheet in step 1.",
-             T.VISIT, T.SITE),
+             "Check size for your lens", T.site_url("/tools/", "start-which-size")),
+            ("Have a Calib.Tools board?", "Pick its part number in step 1 and the pattern settings fill in.",
+             T.VISIT, T.site_url(where="start-have-board")),
         ]
         for title, text, link, url in data:
             c = frame("sheet")
@@ -236,7 +236,7 @@ class WelcomePage(QWidget):
 
         band = frame("inksheet")
         band.setCursor(Qt.CursorShape.PointingHandCursor)
-        band.mouseReleaseEvent = lambda _e: open_site()
+        band.mouseReleaseEvent = lambda _e: open_site(where="start-band")
         bh = QHBoxLayout(band)
         bh.setContentsMargins(20, 20, 20, 20)
         bh.setSpacing(16)
@@ -248,7 +248,7 @@ class WelcomePage(QWidget):
                             "and the software tools for the work around them.", "muted", wrap=True))
         bh.addLayout(txt, 1)
         visit = button(T.VISIT, "ink")
-        visit.clicked.connect(lambda: open_site())
+        visit.clicked.connect(lambda: open_site(where="start-band"))
         visit.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         bh.addWidget(visit, 0, Qt.AlignmentFlag.AlignVCenter)
         v.addWidget(band)
@@ -256,8 +256,8 @@ class WelcomePage(QWidget):
 
         links = QHBoxLayout()
         links.setSpacing(24)
-        links.addWidget(LinkLabel(T.VISIT, T.SITE, "monolink"))
-        links.addWidget(LinkLabel("User guide", T.SITE + "/guides/"))
+        links.addWidget(LinkLabel(T.VISIT, T.site_url(where="start-links"), "monolink"))
+        links.addWidget(LinkLabel("User guide", T.site_url("/guides/", "start-guide")))
         links.addWidget(LinkLabel("Ask a question", question_mailto()))
         links.addWidget(LinkLabel("Report a problem", "https://github.com/calibtools/plumbline/issues"))
         links.addWidget(LinkLabel("Source code, MIT license", "https://github.com/calibtools/plumbline"))
@@ -312,7 +312,7 @@ class WelcomePage(QWidget):
         h.addWidget(label(f"Built on OpenCV {cv2.__version__}", font=T.mono(12), color=T.INK_MUTED))
         h.addStretch(1)
         h.addWidget(label(f"Plumbline {__version__} · early release ·", font=T.mono(12), color=T.INK_MUTED))
-        link = LinkLabel("calib.tools", T.SITE)
+        link = LinkLabel("calib.tools", T.site_url(where="footer"))
         link.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 12px; color: {T.RED_TEXT};')
         h.addWidget(link)
         return w

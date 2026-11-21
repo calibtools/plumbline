@@ -26,6 +26,8 @@ SolidCompression=yes
 LZMAUseSeparateProcess=yes
 LZMANumBlockThreads=4
 WizardStyle=modern
+SetupIconFile=icons\plumbline.ico
+UninstallDisplayIcon={app}\Plumbline.exe
 UninstallDisplayName=Plumbline by Calib.Tools
 
 [Files]

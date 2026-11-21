@@ -14,7 +14,9 @@ a = Analysis(
               "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Plumbline", console=False)
+icons = root / "packaging" / "icons"
+icon = str(icons / ("plumbline.icns" if sys.platform == "darwin" else "plumbline.ico"))
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Plumbline", console=False, icon=icon)
 coll = COLLECT(exe, a.binaries, a.datas, name="Plumbline")
 if sys.platform == "darwin":
-    app = BUNDLE(coll, name="Plumbline.app", bundle_identifier="tools.calib.plumbline")
+    app = BUNDLE(coll, name="Plumbline.app", bundle_identifier="tools.calib.plumbline", icon=icon)

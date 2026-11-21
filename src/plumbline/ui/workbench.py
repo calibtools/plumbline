@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core import export
+from ..core.catalog import find_board, same_geometry, stock_boards
 from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
@@ -134,7 +135,7 @@ class Workbench(QWidget):
         self.name_btn.clicked.connect(self.rename_project)
         h.addWidget(self.name_btn)
         h.addSpacing(16)
-        h.addWidget(LinkLabel(T.VISIT, T.SITE, "monolink"))
+        h.addWidget(LinkLabel(T.VISIT, T.site_url(where="header"), "monolink"))
         return w
 
     def _left(self) -> QWidget:
@@ -182,7 +183,7 @@ class Workbench(QWidget):
 
         card = frame("sheet")
         card.setCursor(Qt.CursorShape.PointingHandCursor)
-        card.mouseReleaseEvent = lambda _e: open_site()
+        card.mouseReleaseEvent = lambda _e: open_site(where="side-card")
         ch = QHBoxLayout(card)
         ch.setContentsMargins(12, 12, 12, 12)
         ch.setSpacing(12)
@@ -190,7 +191,7 @@ class Workbench(QWidget):
         cv_ = QVBoxLayout()
         cv_.setSpacing(4)
         cv_.addWidget(label("Calibration targets by Calib.Tools", font=T.sans(13, 600), wrap=True))
-        cv_.addWidget(LinkLabel(T.VISIT, T.SITE, "monolink"))
+        cv_.addWidget(LinkLabel(T.VISIT, T.site_url(where="side-card"), "monolink"))
         ch.addLayout(cv_, 1)
         wrap = QHBoxLayout()
         wrap.setContentsMargins(16, 6, 16, 0)
@@ -252,6 +253,18 @@ class Workbench(QWidget):
         v = QVBoxLayout(w)
         v.setContentsMargins(20, 16, 20, 16)
         v.setSpacing(12)
+        v.addWidget(label("CALIB.TOOLS BOARD", "eyebrow"))
+        self.preset = QComboBox()
+        self.preset.setFixedHeight(36)
+        self.preset.addItem("Custom target", None)
+        for board in stock_boards():
+            self.preset.addItem(board.part_number, board.part_number)
+        self.preset.setMaxVisibleItems(18)
+        self.preset.currentIndexChanged.connect(self._preset_chosen)
+        v.addWidget(self.preset)
+        self.preset_link = LinkLabel("", T.SITE)
+        v.addWidget(self.preset_link)
+        v.addWidget(rule())
         form = QFormLayout()
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(8)
@@ -297,9 +310,8 @@ class Workbench(QWidget):
         v.addWidget(self.target_hint)
         v.addStretch(1)
         v.addWidget(rule())
-        v.addWidget(label("Count squares, not inner corners. Sizes are on the label of a "
-                          "Calib.Tools board and in its data sheet.", "small", wrap=True))
-        v.addWidget(LinkLabel("Find your board on Calib.Tools ↗", T.SITE))
+        v.addWidget(label("For any other board: count squares, not inner corners, and measure one square.",
+                          "small", wrap=True))
         for wdg in (self.kind, self.dictionary):
             wdg.currentIndexChanged.connect(self._target_changed)
         for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
@@ -389,20 +401,49 @@ class Workbench(QWidget):
         h.addWidget(self.status, 1)
         h.addWidget(label(f"OpenCV {cv2.__version__} · Plumbline {__version__} · early release ·",
                           font=T.mono(12), color=T.INK_MUTED))
-        link = LinkLabel("calib.tools", T.SITE)
+        link = LinkLabel("calib.tools", T.site_url(where="footer"))
         link.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 12px; color: {T.RED_TEXT};')
         h.addWidget(link)
         return w
 
     # ----------------------------------------------------------------- state
+    def _preset_chosen(self, *_):
+        """A part number was picked: fill in its pattern. 'Custom target' leaves the fields as they are."""
+        board = find_board(self.preset.currentData())
+        if board is not None:
+            self._fill_fields(board.target)
+        self._target_changed()
+
+    def _fill_fields(self, t: Target) -> None:
+        fields = (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id)
+        for wdg in fields:
+            wdg.blockSignals(True)
+        self.kind.setCurrentIndex(0 if t.kind == CHARUCO else 1)
+        self.sx.setValue(t.squares_x)
+        self.sy.setValue(t.squares_y)
+        self.square.setValue(t.square_mm)
+        if t.kind == CHARUCO:
+            self.marker.setValue(t.marker_mm)
+            self.dictionary.setCurrentText(t.dictionary)
+            self.legacy.setChecked(t.legacy_pattern)
+            self.first_id.setValue(t.first_marker_id)
+        for wdg in fields:
+            wdg.blockSignals(False)
+
     def current_target(self) -> Target | None:
         kind = self.kind.currentData()
         try:
             if kind == CHARUCO:
-                return Target(CHARUCO, self.sx.value(), self.sy.value(), self.square.value(),
-                              self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked(),
-                              first_marker_id=self.first_id.value())
-            return Target(CHECKERBOARD, self.sx.value(), self.sy.value(), self.square.value())
+                target = Target(CHARUCO, self.sx.value(), self.sy.value(), self.square.value(),
+                                self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked(),
+                                first_marker_id=self.first_id.value())
+            else:
+                target = Target(CHECKERBOARD, self.sx.value(), self.sy.value(), self.square.value())
+            # The part number stays only while the fields still describe that board.
+            board = find_board(self.preset.currentData())
+            if board is not None and same_geometry(board.target, target):
+                return board.target
+            return target
         except ValueError as exc:
             self.target_hint.setText(str(exc).capitalize() + ".")
             self.target_hint.setStyleSheet(f"color: {T.RED_TEXT}; font-size: 12px;")
@@ -420,6 +461,17 @@ class Workbench(QWidget):
                     self.first_id, self.first_id_label):
             wdg.setVisible(charuco)
         target = self.current_target()
+        board = find_board(target.part_number) if target is not None else None
+        if board is None and self.preset.currentIndex() != 0:
+            self.preset.blockSignals(True)  # a field was edited away from the stock board
+            self.preset.setCurrentIndex(0)
+            self.preset.blockSignals(False)
+        if board is not None:
+            self.preset_link.setText(f"{board.part_number} on Calib.Tools \u2197")
+            self.preset_link.set_url(T.site_url(board.product_path, "target-preset"))
+        else:
+            self.preset_link.setText("Find your board on Calib.Tools \u2197")
+            self.preset_link.set_url(T.site_url("/targets/", "target-custom"))
         if target is not None:
             self.target_hint.setStyleSheet("")
             self.target_hint.setText(
@@ -450,19 +502,10 @@ class Workbench(QWidget):
         self.result = None
         t = project.target
         if t is not None:
-            for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id):
-                wdg.blockSignals(True)
-            self.kind.setCurrentIndex(0 if t.kind == CHARUCO else 1)
-            self.sx.setValue(t.squares_x)
-            self.sy.setValue(t.squares_y)
-            self.square.setValue(t.square_mm)
-            if t.kind == CHARUCO:
-                self.marker.setValue(t.marker_mm)
-                self.dictionary.setCurrentText(t.dictionary)
-                self.legacy.setChecked(t.legacy_pattern)
-                self.first_id.setValue(t.first_marker_id)
-            for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id):
-                wdg.blockSignals(False)
+            self._fill_fields(t)
+            self.preset.blockSignals(True)
+            self.preset.setCurrentIndex(max(0, self.preset.findData(t.part_number)) if t.part_number else 0)
+            self.preset.blockSignals(False)
         o = project.options
         for box, val in ((self.opt_k3, o.k3), (self.opt_tangential, o.tangential),
                          (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism)):
@@ -749,7 +792,7 @@ class Workbench(QWidget):
         t = p.target
         good = sum(d.usable for d in dets)
         states = [
-            ("done" if t else "next", t.describe().split(",")[0] if t else "Check the settings"),
+            ("done" if t else "next", t.short_label if t else "Check the settings"),
             ("done" if n else "next" if t else "off", f"{n} loaded" if n else "Add images"),
             ("done" if dets else "next" if n and t else "off",
              f"{good} good · {len(dets) - good} to check" if dets else "Find the corners"),

@@ -23,6 +23,16 @@ GREEN_TEXT = "#007A3D"
 SITE = "https://calib.tools"
 VISIT = "Visit Calib.Tools ↗"
 
+
+
+def site_url(path: str = "", where: str = "app") -> str:
+    """Address on calib.tools, marked so the site can tell the visit came from Plumbline.
+
+    The mark says only which place in the app the link sits in. Nothing about the user is added.
+    """
+    return f"{SITE}{path}?utm_source=plumbline&utm_medium=app&utm_content={where}"
+
+
 SANS = "Geist"
 MONO = "Geist Mono"
 

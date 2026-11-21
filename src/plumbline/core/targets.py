@@ -125,7 +125,21 @@ class Target:
             board.setLegacyPattern(True)
         return board
 
+    @property
+    def short_label(self) -> str:
+        """A few words for tight places: the part number if it has one, else the pattern and its size."""
+        if self.part_number:
+            return self.part_number
+        if self.kind == CHARUCO:
+            return f"ChArUco {self.squares_x} x {self.squares_y}"
+        return f"Checkerboard {self.inner_cols} x {self.inner_rows}"
+
     def describe(self) -> str:
+        if self.part_number:
+            return f"{self.part_number}: {self._describe_pattern()}"
+        return self._describe_pattern()
+
+    def _describe_pattern(self) -> str:
         if self.kind == CHARUCO:
             text = (
                 f"ChArUco {self.squares_x} x {self.squares_y}, "

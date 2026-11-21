@@ -244,3 +244,25 @@ def test_recalibration_due_dates():
     assert due_date("2026-11-22", 0) is None and due_date(None, 6) is None
     assert is_due("2027-05-22", date(2027, 5, 22)) and not is_due("2027-05-22", date(2027, 5, 21))
     assert not is_due(None)
+
+
+def test_every_stock_board_is_a_valid_target_and_can_be_found(camera):
+    from plumbline.core.catalog import find_board, same_geometry, stock_boards
+    from plumbline.core.detect import detect
+
+    boards = stock_boards()
+    assert len(boards) >= 20
+    assert len({b.part_number for b in boards}) == len(boards)
+    for b in boards:
+        assert b.part_number.startswith("CT-") and b.product
+        assert find_board(b.part_number) is b
+        assert b.target.describe().startswith(b.part_number + ": ")
+    assert find_board("CT-NOPE") is None and find_board(None) is None
+    # One of each kind is rendered and found again with the settings the part number gives.
+    for pn in ("CT-CHA-P-400X300-D5", "CT-CHT-P-300X200-C"):
+        t = find_board(pn).target
+        r, tv = synth.sample_poses(t, camera, 1, seed=3)[0]
+        found = detect(synth.render(t, camera, r, tv, np.random.default_rng(3)), t)
+        assert found.count > 0.6 * t.corner_count
+    a = find_board("CT-CHA-P-400X300-D5").target
+    assert same_geometry(a, Target(CHARUCO, a.squares_x, a.squares_y, a.square_mm, a.marker_mm, a.dictionary))
