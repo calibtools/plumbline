@@ -17,10 +17,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from plumbline.core.targets import ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, Target  # noqa: E402
+from plumbline.core.targets import (  # noqa: E402
+    APRILGRID, ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, Target,
+)
 
 KIND = {"ChArUco": CHARUCO, "Checkerboard": CHECKERBOARD,
-        "Symmetric circles": CIRCLES, "Asymmetric circles": ASYMMETRIC_CIRCLES}
+        "Symmetric circles": CIRCLES, "Asymmetric circles": ASYMMETRIC_CIRCLES,
+        "AprilGrid (Kalibr)": APRILGRID}
 
 DUMP = """
 import { CATALOG } from '%s/src/lib/catalogPatterns';
@@ -51,6 +54,14 @@ def main() -> int:
         }
         if entry["kind"] == CHARUCO:
             entry.update(marker_mm=r["marker"], dictionary=r["dict"], first_marker_id=r.get("startId", 0))
+        elif entry["kind"] == APRILGRID:
+            # The site gives the gap as a share of the tag size; Target takes it in mm.
+            family = f"DICT_APRILTAG_{r.get('aprilFamily', '36h11')}"
+            if r.get("tagIdList") or family not in DICTIONARIES or r.get("borderBits", 2) != 2:
+                dropped.append((r["pn"], "tag numbering, family or border this version cannot describe"))
+                continue
+            entry.update(marker_mm=round(r["square"] * r.get("tagSpacing", 0.3), 6), dictionary=family,
+                         first_marker_id=r.get("startId", 0))
         elif entry["kind"] in (CIRCLES, ASYMMETRIC_CIRCLES):
             # The site walks a square lattice of rows x cols with spacing `square`; so does Target.
             if r.get("circleSpacingX") or r.get("circleSpacingY"):

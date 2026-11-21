@@ -25,7 +25,9 @@ from ..core.export_code import write_example, write_maps
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
-from ..core.targets import ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, Target
+from ..core.targets import (
+    APRILGRID, ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, Target,
+)
 from . import theme as T
 from .export_dialog import ExportDialog
 from .report import write_report
@@ -47,7 +49,7 @@ class StepButton(QPushButton):
         self.setFixedHeight(40)
         self.setMinimumWidth(150)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 3, 12, 3)
+        lay.setContentsMargins(10, 3, 10, 3)
         lay.setSpacing(0)
         self._name = label(title)
         self._status = label("")
@@ -68,6 +70,11 @@ class StepButton(QPushButton):
         )
         self._name.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 13px; font-weight: 600; color: {ink};')
         self._status.setStyleSheet(f"font-size: 11px; color: {sub};")
+        # A long part number is cut with an ellipsis, never mid-letter; the full text is in the tooltip.
+        room = max(40, self.width() - 22)
+        shown = self._status.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, room)
+        self.setToolTip(status if shown != status else "")
+        status = shown
         self._status.setText(status)
 
 
@@ -122,6 +129,7 @@ class Workbench(QWidget):
         h.addWidget(home)
         h.addSpacing(16)
         self.steps = [StepButton(t) for t in ("1 Target", "2 Images", "3 Detect", "4 Calibrate", "5 Export")]
+        self.steps[0].setMinimumWidth(168)  # room for a part number such as CT-APR-P-800X600-T36
         actions = (self._goto_target, self.add_images, self.run_detection, self.run_calibration, self.export_all)
         for s, act in zip(self.steps, actions):
             s.clicked.connect(act)
@@ -276,9 +284,11 @@ class Workbench(QWidget):
         self.kind.addItem("Checkerboard", CHECKERBOARD)
         self.kind.addItem("Circle grid", CIRCLES)
         self.kind.addItem("Asymmetric circles", ASYMMETRIC_CIRCLES)
+        self.kind.addItem("AprilGrid", APRILGRID)
+        self._last_kind = CHARUCO
         self.sx, self.sy = QSpinBox(), QSpinBox()
         for s, val in ((self.sx, 11), (self.sy, 8)):
-            s.setRange(3, 200)
+            s.setRange(2, 200)
             s.setValue(val)
         self.square, self.marker = QDoubleSpinBox(), QDoubleSpinBox()
         for s, val in ((self.square, 30.0), (self.marker, 22.0)):
@@ -450,11 +460,12 @@ class Workbench(QWidget):
         self.sx.setValue(t.squares_x)
         self.sy.setValue(t.squares_y)
         self.square.setValue(t.square_mm)
-        if t.kind == CHARUCO:
+        if t.kind in (CHARUCO, APRILGRID):
             self.marker.setValue(t.marker_mm)
             self.dictionary.setCurrentText(t.dictionary)
             self.legacy.setChecked(t.legacy_pattern)
             self.first_id.setValue(t.first_marker_id)
+        self._last_kind = t.kind
         for wdg in fields:
             wdg.blockSignals(False)
 
@@ -464,6 +475,10 @@ class Workbench(QWidget):
             if kind == CHARUCO:
                 target = Target(CHARUCO, self.sx.value(), self.sy.value(), self.square.value(),
                                 self.marker.value(), self.dictionary.currentText(), self.legacy.isChecked(),
+                                first_marker_id=self.first_id.value())
+            elif kind == APRILGRID:
+                target = Target(APRILGRID, self.sx.value(), self.sy.value(), self.square.value(),
+                                self.marker.value(), self.dictionary.currentText(),
                                 first_marker_id=self.first_id.value())
             else:
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value())
@@ -487,7 +502,23 @@ class Workbench(QWidget):
     def _target_changed(self, *_):
         kind = self.kind.currentData()
         charuco = kind == CHARUCO
-        if kind == CIRCLES:
+        tags = kind in (CHARUCO, APRILGRID)
+        if kind != self._last_kind and tags:
+            # ChArUco boards and AprilGrids use different marker families; start from the usual one.
+            april = "APRILTAG" in self.dictionary.currentText()
+            if (kind == APRILGRID) != april:
+                self.dictionary.blockSignals(True)
+                self.dictionary.setCurrentText("DICT_APRILTAG_36h11" if kind == APRILGRID else "DICT_5X5_250")
+                self.dictionary.blockSignals(False)
+        self._last_kind = kind
+        self.marker_label.setText("Tag gap" if kind == APRILGRID else "Marker size")
+        self.first_id_label.setText("First tag ID" if kind == APRILGRID else "First marker ID")
+        if kind == APRILGRID:
+            names = ("Tags across", "Tags down", "Tag size")
+            note = ("Measure a tag across its black border, and the white gap to the next tag. "
+                    "IDs run from the bottom-left tag to the right and then upward, as Kalibr lays them out. "
+                    "Part of the grid in the image is enough.")
+        elif kind == CIRCLES:
             names = ("Circles across", "Circles down", "Spacing")
             note = "For any other board: count the circles, and measure from the centre of one to the centre of the next."
         elif kind == ASYMMETRIC_CIRCLES:
@@ -500,9 +531,10 @@ class Workbench(QWidget):
         for wdg, text in zip((self.sx_label, self.sy_label, self.square_label), names):
             wdg.setText(text)
         self.target_note.setText(note)
-        for wdg in (self.marker, self.dictionary, self.legacy, self.marker_label, self.dict_label,
+        for wdg in (self.marker, self.dictionary, self.marker_label, self.dict_label,
                     self.first_id, self.first_id_label):
-            wdg.setVisible(charuco)
+            wdg.setVisible(tags)
+        self.legacy.setVisible(charuco)
         target = self.current_target()
         board = find_board(target.part_number) if target is not None else None
         if board is None and self.preset.currentIndex() != 0:
@@ -517,7 +549,13 @@ class Workbench(QWidget):
             self.preset_link.set_url(T.site_url("/targets/", "target-custom"))
         if target is not None:
             self.target_hint.setStyleSheet("")
-            if target.is_circles:
+            if target.kind == APRILGRID:
+                self.target_hint.setText(
+                    f"{target.marker_count} tags, {target.corner_count} corners, "
+                    f"pattern {target.width_mm:g} x {target.height_mm:g} mm, tag IDs {target.first_marker_id} "
+                    f"to {target.first_marker_id + target.marker_count - 1}."
+                )
+            elif target.is_circles:
                 cols, rows = target.opencv_size
                 self.target_hint.setText(
                     f"{target.corner_count} circles, {rows} rows of {cols}. "

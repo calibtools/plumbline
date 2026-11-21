@@ -357,6 +357,61 @@
    "square_mm": 50
   },
   {
+   "part_number": "CT-APR-P-200X150-T36",
+   "product": "aprilgrid-composite",
+   "kind": "aprilgrid",
+   "squares_x": 6,
+   "squares_y": 4,
+   "square_mm": 25,
+   "marker_mm": 7.5,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-APR-P-300X200-T36",
+   "product": "aprilgrid-composite",
+   "kind": "aprilgrid",
+   "squares_x": 7,
+   "squares_y": 5,
+   "square_mm": 30,
+   "marker_mm": 9.0,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-APR-P-400X300-T36",
+   "product": "aprilgrid-composite",
+   "kind": "aprilgrid",
+   "squares_x": 8,
+   "squares_y": 6,
+   "square_mm": 35,
+   "marker_mm": 10.5,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-APR-P-600X400-T36",
+   "product": "aprilgrid-composite",
+   "kind": "aprilgrid",
+   "squares_x": 10,
+   "squares_y": 7,
+   "square_mm": 45,
+   "marker_mm": 13.5,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
+   "part_number": "CT-APR-P-800X600-T36",
+   "product": "aprilgrid-composite",
+   "kind": "aprilgrid",
+   "squares_x": 12,
+   "squares_y": 9,
+   "square_mm": 50,
+   "marker_mm": 15.0,
+   "dictionary": "DICT_APRILTAG_36h11",
+   "first_marker_id": 0
+  },
+  {
    "part_number": "CT-CIR-P-200X150-SYM",
    "product": "circlegrid-composite",
    "kind": "circles",
