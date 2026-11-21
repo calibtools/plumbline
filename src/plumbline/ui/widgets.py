@@ -262,6 +262,8 @@ RESIDUAL_GAIN = 30  # residual vectors are drawn this many times longer than the
 class ImageView(QWidget):
     """Shows one image with its detected corners and, after calibration, the residuals."""
 
+    corrected_toggled = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
@@ -270,6 +272,34 @@ class ImageView(QWidget):
         self._residuals: np.ndarray | None = None
         self._message = ""
         self._caption = ""
+        self._allowed = False
+        self.corrected_btn = button("Corrected view")
+        self.corrected_btn.setParent(self)
+        self.corrected_btn.setCheckable(True)
+        self.corrected_btn.setToolTip("Show the image with the lens distortion of this result removed")
+        self.corrected_btn.setFixedSize(150, 32)
+        self.corrected_btn.hide()
+        self.corrected_btn.toggled.connect(self.corrected_toggled)
+
+    @property
+    def corrected(self) -> bool:
+        return self._allowed and self.corrected_btn.isChecked()
+
+    def allow_corrected(self, allowed: bool) -> None:
+        """The switch is offered only while there is a result to correct with."""
+        self._allowed = allowed
+        self.corrected_btn.setVisible(allowed)
+        self._place_button()
+        self.update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_button()
+
+    def _place_button(self) -> None:
+        # In the caption strip under the image, right-aligned; never on top of the image.
+        b = self.corrected_btn
+        b.move(self.width() - b.width() - 16, self.height() - 16 - 36)
 
     def set_message(self, text: str):
         self._pix, self._message, self._caption = None, text, ""
@@ -316,5 +346,6 @@ class ImageView(QWidget):
                 p.drawLine(pt, QPointF(pt.x() + dx * RESIDUAL_GAIN * s, pt.y() + dy * RESIDUAL_GAIN * s))
         p.setPen(QColor(T.INK_MUTED))
         p.setFont(T.mono(12))
-        p.drawText(QRectF(pad, self.height() - pad - 34, self.width() - 2 * pad, 36),
+        room = self.corrected_btn.width() + 16 if self._allowed else 0
+        p.drawText(QRectF(pad, self.height() - pad - 34, self.width() - 2 * pad - room, 36),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, self._caption)

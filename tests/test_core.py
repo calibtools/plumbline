@@ -3,12 +3,13 @@ import cv2
 import numpy as np
 import pytest
 
-from plumbline.core import export, synth
+from plumbline.core import export, lens, synth
 from plumbline.core.calibrate import (
     CalibrationError, ModelOptions, calibrate, coverage_grid,
     projection_difference, suggest_exclusions,
 )
 from plumbline.core.detect import Detection
+from plumbline.core.findings import error_outside_fit, model_sentence
 from plumbline.core.project import Project
 from plumbline.core.targets import CHARUCO, Target
 
@@ -266,3 +267,96 @@ def test_every_stock_board_is_a_valid_target_and_can_be_found(camera):
         assert found.count > 0.6 * t.corner_count
     a = find_board("CT-CHA-P-400X300-D5").target
     assert same_geometry(a, Target(CHARUCO, a.squares_x, a.squares_y, a.square_mm, a.marker_mm, a.dictionary))
+
+
+def test_fisheye_lens_is_recovered(charuco, fisheye_camera, fisheye_set):
+    """A wide lens rendered with the fisheye model comes back from the fisheye fit."""
+    poses, _images, dets = fisheye_set
+    cam = fisheye_camera
+    assert sum(d.usable for d in dets) >= 20
+    for det, (r, t) in zip(dets, poses):
+        if det.usable:
+            truth = synth.true_corners(charuco, cam, r, t)[det.ids]
+            assert np.median(np.linalg.norm(truth - det.corners, axis=1)) < 0.3
+
+    result = calibrate(dets, charuco, ModelOptions(fisheye=True))
+    assert result.fisheye and len(result.distortion) == 4
+    assert result.distortion_names == ["k1", "k2", "k3", "k4"]
+    assert abs(result.fx - cam.K[0, 0]) / cam.K[0, 0] < 0.002
+    assert abs(result.fy - cam.K[1, 1]) / cam.K[1, 1] < 0.002
+    assert abs(result.cx - cam.K[0, 2]) < 1.0 and abs(result.cy - cam.K[1, 2]) < 1.0
+    assert result.rms_point < 0.3
+    mean, _ = projection_difference(result.camera_matrix, result.distortion, cam.K, cam.dist,
+                                    cam.width, cam.height, fisheye=True)
+    assert mean < 0.3
+
+    # The standard model with its default terms cannot describe this lens; the fit says so.
+    assert calibrate(dets, charuco).rms_point > 3 * result.rms_point
+
+    # An image left out of the fit still gets an error figure under the fisheye result.
+    left_out = calibrate(dets, charuco, ModelOptions(fisheye=True), excluded={2})
+    assert error_outside_fit(left_out, dets[2]) < 0.5
+
+
+def test_fisheye_exports_say_which_model(tmp_path, charuco, fisheye_set):
+    import json
+    import yaml
+
+    _poses, _images, dets = fisheye_set
+    result = calibrate(dets, charuco, ModelOptions(fisheye=True))
+    assert model_sentence(result) == "OpenCV fisheye model, radial terms k1 to k4."
+
+    yml = tmp_path / "camera.yml"
+    export.write_opencv_yaml(result, yml)
+    fs = cv2.FileStorage(str(yml), cv2.FILE_STORAGE_READ)
+    assert fs.getNode("distortion_model").string() == "opencv_fisheye"
+    assert fs.getNode("distortion_coefficients").mat().shape == (1, 4)
+    fs.release()
+
+    xml = tmp_path / "camera.xml"
+    export.write_opencv_xml(result, xml)
+    fs = cv2.FileStorage(str(xml), cv2.FILE_STORAGE_READ)
+    assert fs.getNode("distortion_model").string() == "opencv_fisheye"
+    fs.release()
+
+    js = tmp_path / "camera.json"
+    export.write_json(result, js)
+    data = json.loads(js.read_text())
+    assert data["model"] == "opencv_fisheye" and data["distortion_names"] == ["k1", "k2", "k3", "k4"]
+    assert data["options"]["fisheye"] is True
+
+    ros = yaml.safe_load(export.ros_camera_info(result, "wide"))
+    assert ros["distortion_model"] == "equidistant" and len(ros["distortion_coefficients"]["data"]) == 4
+
+    # The standard model is named too, so a reader never has to guess.
+    standard = calibrate(dets, charuco, ModelOptions(rational=True))
+    assert export.result_summary(standard)["model"] == "opencv"
+    assert 'distortion_model: "opencv"' in export.opencv_yaml(standard)
+
+
+def test_corrected_view_straightens_the_board(charuco, camera, charuco_set, fisheye_camera, fisheye_set):
+    """After correction the corners of a flat board fit a plane-to-plane mapping with no lens terms."""
+    for cam, (_poses, images, dets), options in (
+        (camera, charuco_set, ModelOptions()),
+        (fisheye_camera, fisheye_set, ModelOptions(fisheye=True)),
+    ):
+        result = calibrate(dets, charuco, options)
+        det = max(dets, key=lambda d: d.count)
+        img = images[dets.index(det)]
+        out, moved, new_K = lens.corrected_view(img, det.corners, result.camera_matrix,
+                                                result.distortion, result.fisheye)
+        assert out.shape == img.shape and new_K.shape == (3, 3)
+        board = charuco.object_points()[det.ids][:, :2].astype(np.float64)
+
+        def misfit(points):
+            H, _ = cv2.findHomography(board, points, 0)
+            back = cv2.perspectiveTransform(board.reshape(-1, 1, 2), H).reshape(-1, 2)
+            return float(np.sqrt(np.mean(np.sum((back - points) ** 2, axis=1))))
+
+        assert misfit(moved) < 0.25
+        assert misfit(det.corners.astype(np.float64)) > 2 * misfit(moved)
+
+
+def test_old_project_options_still_load():
+    assert ModelOptions.from_dict({"k3": True, "something_newer": 1}) == ModelOptions(k3=True)
+    assert ModelOptions.from_dict({}).fisheye is False

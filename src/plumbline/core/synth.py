@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from . import lens
 from .targets import CHARUCO, Target
 
 PX_PER_MM = 8.0
@@ -23,12 +24,20 @@ class Camera:
     height: int
     K: np.ndarray
     dist: np.ndarray
+    fisheye: bool = False
 
 
 def default_camera() -> Camera:
     K = np.array([[1500.0, 0, 640.0], [0, 1500.0, 480.0], [0, 0, 1]], np.float64)
     dist = np.array([-0.12, 0.10, 0.0005, -0.0003, 0.0], np.float64)
     return Camera(1280, 960, K, dist)
+
+
+def fisheye_camera() -> Camera:
+    """A wide lens, about 130 degrees across the image width."""
+    K = np.array([[560.0, 0, 640.0], [0, 560.0, 480.0], [0, 0, 1]], np.float64)
+    dist = np.array([-0.03, 0.006, -0.002, 0.0004], np.float64)
+    return Camera(1280, 960, K, dist, True)
 
 
 def board_texture(target: Target, margin_squares: float = 1.0) -> tuple[np.ndarray, float]:
@@ -101,9 +110,8 @@ def render_texture(
 
     u, v = np.meshgrid(np.arange(camera.width, dtype=np.float64),
                        np.arange(camera.height, dtype=np.float64))
-    px = np.stack([u.ravel(), v.ravel()], axis=1).reshape(-1, 1, 2)
-    rays = cv2.undistortPoints(px, camera.K, camera.dist).reshape(-1, 2)
-    d = np.hstack([rays, np.ones((len(rays), 1))])  # ray directions, camera frame
+    px = np.stack([u.ravel(), v.ravel()], axis=1)
+    d = lens.pixel_directions(px, camera.K, camera.dist, camera.fisheye)  # camera frame
 
     # Board plane: points X = R p + t with p_z = 0. Solve for p along each ray.
     n = R[:, 2]
@@ -168,7 +176,11 @@ def sample_poses(
         slack_y = 0.25 * camera.height
         cu = camera.K[0, 2] + rng.uniform(-slack_x, slack_x)
         cv_ = camera.K[1, 2] + rng.uniform(-slack_y, slack_y)
-        c_cam = np.array([(cu - camera.K[0, 2]) / f * z, (cv_ - camera.K[1, 2]) / f * z, z])
+        if camera.fisheye:
+            ray = lens.pixel_directions([[cu, cv_]], camera.K, camera.dist, True)[0]
+            c_cam = ray * z  # z is the distance along the ray here
+        else:
+            c_cam = np.array([(cu - camera.K[0, 2]) / f * z, (cv_ - camera.K[1, 2]) / f * z, z])
         t = c_cam - R @ centre
         rvec, _ = cv2.Rodrigues(R)
         poses.append((rvec.reshape(3), t))
@@ -185,5 +197,4 @@ def render_set(
 
 def true_corners(target: Target, camera: Camera, rvec, tvec) -> np.ndarray:
     """Where the inner corners project for a pose, (N, 2)."""
-    proj, _ = cv2.projectPoints(target.object_points().astype(np.float64), rvec, tvec, camera.K, camera.dist)
-    return proj.reshape(-1, 2)
+    return lens.project(target.object_points(), rvec, tvec, camera.K, camera.dist, camera.fisheye)

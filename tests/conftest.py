@@ -37,3 +37,13 @@ def charuco_set(charuco, camera):
 @pytest.fixture(scope="session")
 def checker_set(checkerboard, camera):
     return _make(checkerboard, camera, 20, 11)
+
+
+@pytest.fixture(scope="session")
+def fisheye_camera():
+    return synth.fisheye_camera()
+
+
+@pytest.fixture(scope="session")
+def fisheye_set(charuco, fisheye_camera):
+    return _make(charuco, fisheye_camera, 24, 7)

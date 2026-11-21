@@ -12,7 +12,6 @@ from PySide6.QtSvg import QSvgRenderer
 from .. import __version__
 from ..core.calibrate import CalibrationResult, coverage_grid
 from ..core.detect import Detection
-from ..core.export import DIST_NAMES
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, model_sentence
 from . import theme as T
 from .widgets import _nice_ticks
@@ -157,7 +156,7 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
     h_a = _kv_table(p, M, y, half, [("fx, px", f"{r.fx:.3f}"), ("fy, px", f"{r.fy:.3f}"),
                                     ("cx, px", f"{r.cx:.3f}"), ("cy, px", f"{r.cy:.3f}")])
     h_b = _kv_table(p, M + half + 16, y, half,
-                    [(k, f"{v:.6f}") for k, v in zip(DIST_NAMES, r.distortion)])
+                    [(k, f"{v:.6f}") for k, v in zip(r.distortion_names, r.distortion)])
     y += max(h_a, h_b) + 20
 
     # Target and method.

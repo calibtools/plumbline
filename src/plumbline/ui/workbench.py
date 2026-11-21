@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import export
+from ..core import export, lens
 from ..core.catalog import find_board, same_geometry, stock_boards
 from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
@@ -205,6 +205,7 @@ class Workbench(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
         self.view = ImageView()
+        self.view.corrected_toggled.connect(lambda _on: self._show(self._current))
         v.addWidget(self.view, 1)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
@@ -325,8 +326,15 @@ class Workbench(QWidget):
         v.setContentsMargins(20, 16, 20, 16)
         v.setSpacing(6)
         v.addWidget(label("LENS MODEL", "eyebrow"))
-        v.addWidget(label("OpenCV standard model: focal lengths, principal point, "
-                          "radial terms k1 and k2.", "muted", wrap=True))
+        self.lens_kind = QComboBox()
+        self.lens_kind.setFixedHeight(36)
+        self.lens_kind.addItem("Standard lens", False)
+        self.lens_kind.addItem("Fisheye lens", True)
+        self.lens_kind.currentIndexChanged.connect(self._options_changed)
+        v.addWidget(self.lens_kind)
+        v.addSpacing(4)
+        self.model_text = label("", "muted", wrap=True)
+        v.addWidget(self.model_text)
         v.addSpacing(8)
         self.opt_tangential = QCheckBox("Tangential terms p1, p2")
         self.opt_tangential.setChecked(True)
@@ -337,10 +345,26 @@ class Workbench(QWidget):
             v.addWidget(c)
             c.toggled.connect(self._options_changed)
         v.addSpacing(8)
-        v.addWidget(label("Start with the defaults. Add terms only if the error stays high "
-                          "at the image edges; more terms need more images.", "small", wrap=True))
+        self.model_hint = label("", "small", wrap=True)
+        v.addWidget(self.model_hint)
         v.addStretch(1)
+        self._model_texts()
         return w
+
+    def _model_texts(self) -> None:
+        fisheye = bool(self.lens_kind.currentData())
+        for c in (self.opt_tangential, self.opt_k3, self.opt_rational, self.opt_prism):
+            c.setVisible(not fisheye)
+        if fisheye:
+            self.model_text.setText("OpenCV fisheye model: focal lengths, principal point, "
+                                    "radial terms k1 to k4. For lenses wider than about 100 degrees.")
+            self.model_hint.setText("A fisheye lens needs views that reach the corners of the image. "
+                                    "Other software must read the result with its fisheye functions.")
+        else:
+            self.model_text.setText("OpenCV standard model: focal lengths, principal point, "
+                                    "radial terms k1 and k2.")
+            self.model_hint.setText("Start with the defaults. Add terms only if the error stays high "
+                                    "at the image edges; more terms need more images.")
 
     def _tab_result(self) -> QWidget:
         w = QWidget()
@@ -453,6 +477,7 @@ class Workbench(QWidget):
         return ModelOptions(
             k3=self.opt_k3.isChecked(), tangential=self.opt_tangential.isChecked(),
             rational=self.opt_rational.isChecked(), thin_prism=self.opt_prism.isChecked(),
+            fisheye=bool(self.lens_kind.currentData()),
         )
 
     def _target_changed(self, *_):
@@ -491,6 +516,7 @@ class Workbench(QWidget):
         self._refresh()
 
     def _options_changed(self, *_):
+        self._model_texts()
         self.project.options = self.current_options()
         if self.result is not None:
             self.result = None
@@ -512,6 +538,10 @@ class Workbench(QWidget):
             box.blockSignals(True)
             box.setChecked(val)
             box.blockSignals(False)
+        self.lens_kind.blockSignals(True)
+        self.lens_kind.setCurrentIndex(1 if o.fisheye else 0)
+        self.lens_kind.blockSignals(False)
+        self._model_texts()
         self._target_changed()
         if self.project.target is None:
             self.project.target = t
@@ -521,6 +551,7 @@ class Workbench(QWidget):
 
     def reset(self) -> None:
         self.load_project(Project(target=self.current_target()))
+        self._say("")
 
     # --------------------------------------------------------------- actions
     def _goto_target(self):
@@ -695,6 +726,7 @@ class Workbench(QWidget):
         self._current = row
         paths, dets = self.project.image_paths, self.project.detections
         if row < 0 or row >= len(paths):
+            self.view.allow_corrected(False)
             self.view.set_message(self._empty_message())
             self._update_toggle()
             return
@@ -711,7 +743,15 @@ class Workbench(QWidget):
         else:
             caption = f"{name} · {det.width} × {det.height} · {det.count} corners"
         corners = det.corners if det is not None else np.zeros((0, 2))
-        self.view.set_image(read_gray(paths[row]), corners, view.residuals if view else None, caption)
+        gray = read_gray(paths[row])
+        residuals = view.residuals if view else None
+        r = self.result
+        self.view.allow_corrected(r is not None)
+        if gray is not None and r is not None and self.view.corrected:
+            gray, corners, _ = lens.corrected_view(gray, corners, r.camera_matrix, r.distortion, r.fisheye)
+            residuals = None
+            caption = f"{name} · corrected view · lens distortion removed with this result"
+        self.view.set_image(gray, corners, residuals, caption)
         self._update_toggle()
         self._refresh_chart()
 
@@ -823,15 +863,26 @@ class Workbench(QWidget):
         )
         for k, val in zip(("fx", "fy", "cx", "cy"), (r.fx, r.fy, r.cx, r.cy)):
             self.intr[1][k].setText(f"{val:.2f}")
-        self._fill_dist(list(zip(export.DIST_NAMES, r.distortion)))
+        self._fill_dist(list(zip(r.distortion_names, r.distortion)))
         self._fill_findings(self._make_findings(r, share))
+
+    @staticmethod
+    def _clear(lay) -> None:
+        """Empty a layout at once. deleteLater alone leaves the old widgets painted until the
+        event loop gets round to them, and they show through the new ones."""
+        while lay.count():
+            item = lay.takeAt(0)
+            wdg = item.widget()
+            if wdg is not None:
+                wdg.hide()
+                wdg.setParent(None)
+                wdg.deleteLater()
+            elif item.layout() is not None:
+                Workbench._clear(item.layout())
 
     def _fill_dist(self, pairs):
         lay = self.dist_layout
-        while lay.count():
-            item = lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._clear(lay)
         if not pairs:
             lay.addWidget(label("–", font=T.mono(13), color=T.INK_MUTED), 0, 0)
             return
@@ -849,15 +900,7 @@ class Workbench(QWidget):
 
     def _fill_findings(self, items):
         lay = self.findings
-        while lay.count():
-            item = lay.takeAt(0)
-            if item.layout():
-                while item.layout().count():
-                    sub = item.layout().takeAt(0)
-                    if sub.widget():
-                        sub.widget().deleteLater()
-            elif item.widget():
-                item.widget().deleteLater()
+        self._clear(lay)
         for tag, color, text in items:
             row = QHBoxLayout()
             row.setSpacing(10)
