@@ -22,10 +22,21 @@ class Project:
     excluded: set[int] = field(default_factory=set)
     path: str | None = None
     last_rms_point: float | None = None
+    title: str | None = None  # the name the user sees; file names are built from it
+    revision: int = 0  # number of the last export, 0 = never exported
+    export_signature: str | None = None  # fingerprint of the result of the last export
 
     @property
     def name(self) -> str:
+        if self.title:
+            return self.title
         return Path(self.path).stem if self.path else "Untitled"
+
+    def revision_for(self, signature: str) -> int:
+        """Revision an export of a result with this fingerprint gets. Same result, same revision."""
+        if self.revision and signature == self.export_signature:
+            return self.revision
+        return self.revision + 1
 
     def to_dict(self) -> dict:
         return {
@@ -36,6 +47,9 @@ class Project:
             "detections": [d.to_dict() for d in self.detections],
             "excluded": sorted(self.excluded),
             "last_rms_point": self.last_rms_point,
+            "title": self.title,
+            "revision": self.revision,
+            "export_signature": self.export_signature,
         }
 
     def save(self, path: str | None = None) -> None:
@@ -58,4 +72,7 @@ class Project:
             excluded=set(data.get("excluded", [])),
             path=str(path),
             last_rms_point=data.get("last_rms_point"),
+            title=data.get("title"),
+            revision=int(data.get("revision") or 0),
+            export_signature=data.get("export_signature"),
         )

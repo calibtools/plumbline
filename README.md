@@ -10,10 +10,11 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Targets: ChArUco and checkerboard
 - OpenCV standard lens model (optional k3, tangential, rational and thin prism terms)
 - Reprojection error per image, corner coverage map, excluding images and solving again
-- Export: OpenCV YAML, JSON, ROS `camera_info`
+- Export: OpenCV YAML and XML, JSON, ROS `camera_info`, Excel workbook, PDF report; choose which files to write
+- Boards of a set that continue the marker numbering (first marker ID)
 - Project files, built-in sample images
 
-Not yet: PDF report, installers, more patterns, fisheye models, uncertainty, several cameras.
+Not yet: installers, more patterns, fisheye models, uncertainty, several cameras.
 
 ## How results are checked
 
@@ -38,4 +39,4 @@ The browser prototype (TypeScript, opencv.js) is kept on the branch `archive/bro
 
 ## Third-party
 
-OpenCV (Apache 2.0), Qt for Python / PySide6 (LGPL v3), NumPy (BSD), Geist typeface (SIL OFL 1.1, see `src/plumbline/assets/fonts/OFL.txt`).
+OpenCV (Apache 2.0), Qt for Python / PySide6 (LGPL v3), NumPy (BSD), openpyxl (MIT), Geist typeface (SIL OFL 1.1, see `src/plumbline/assets/fonts/OFL.txt`).

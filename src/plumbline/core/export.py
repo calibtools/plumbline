@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from .. import __version__
@@ -128,3 +129,35 @@ def ros_camera_info(result: CalibrationResult, camera_name: str = "camera") -> s
 
 def write_ros_camera_info(result: CalibrationResult, path: str | Path, camera_name: str = "camera") -> None:
     Path(path).write_text(ros_camera_info(result, camera_name), encoding="utf-8")
+
+
+def write_opencv_xml(result: CalibrationResult, path: str | Path) -> None:
+    """OpenCV FileStorage XML: the parameters plus the per-image figures of the report.
+
+    Written by OpenCV itself, so cv::FileStorage reads it back in C++ and Python.
+    The key names match the YAML export; the report figures are extra keys.
+    """
+    fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE | cv2.FILE_STORAGE_FORMAT_XML)
+    try:
+        fs.write("generator", f"Plumbline {__version__} by Calib.Tools, https://calib.tools")
+        fs.write("opencv_version", result.opencv_version)
+        fs.write("image_width", int(result.image_width))
+        fs.write("image_height", int(result.image_height))
+        fs.write("camera_matrix", np.asarray(result.camera_matrix, np.float64))
+        fs.write("distortion_coefficients", np.asarray(result.distortion, np.float64).reshape(1, -1))
+        fs.write("avg_reprojection_error", float(result.rms_point))
+        fs.write("rms_per_coordinate", float(result.rms_coordinate))
+        fs.write("target", result.target.describe())
+        fs.write("views_used", len(result.views))
+        fs.write("corners_used", int(result.corner_total))
+        fs.startWriteStruct("image_files", cv2.FileNode_SEQ)
+        for v in result.views:
+            fs.write("", Path(v.path).name)
+        fs.endWriteStruct()
+        fs.write("per_view_corners", np.array([[v.corner_count] for v in result.views], np.int32))
+        fs.write("per_view_reprojection_errors", np.array([[v.rms_point] for v in result.views], np.float64))
+        fs.write("per_view_max_errors", np.array([[v.max_error] for v in result.views], np.float64))
+        fs.write("rotation_vectors", np.array([v.rvec for v in result.views], np.float64))
+        fs.write("translation_vectors_mm", np.array([v.tvec for v in result.views], np.float64))
+    finally:
+        fs.release()

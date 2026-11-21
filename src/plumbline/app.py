@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .core import synth
+from .core.naming import default_name
 from .core.project import SUFFIX, Project
 from .core.targets import CHARUCO, Target
 from .ui import theme as T
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Plumbline by Calib.Tools")
         self.setWindowIcon(QIcon(T.asset("app-icon.png")))
         self.resize(1440, 900)
-        self.setMinimumSize(1180, 760)
+        self.setMinimumSize(1360, 760)  # the header needs this much for steps, project name and link
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
         self.welcome = WelcomePage()
@@ -50,7 +51,14 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.welcome)
 
     def new_project(self):
+        from PySide6.QtCore import QSettings
+
+        settings = QSettings()
+        number = int(settings.value("project_counter", 0) or 0) + 1
+        settings.setValue("project_counter", number)  # a number is used once, even if the project is dropped
         self.bench.reset()
+        self.bench.project.title = default_name(number)
+        self.bench._refresh()
         self.stack.setCurrentWidget(self.bench)
 
     def open_project(self):
@@ -106,7 +114,7 @@ class MainWindow(QMainWindow):
         w.start()
 
     def _open_sample(self, paths):
-        self.bench.load_project(Project(target=SAMPLE_TARGET))
+        self.bench.load_project(Project(target=SAMPLE_TARGET, title="Sample-ChArUco"))
         self.stack.setCurrentWidget(self.bench)
         self.bench.add_images([str(p) for p in paths])
 

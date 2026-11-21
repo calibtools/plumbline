@@ -146,6 +146,19 @@ def test_exports_round_trip(tmp_path, charuco, charuco_set):
     with pytest.raises(ValueError):
         export.ros_camera_info(prism)
 
+    xml = tmp_path / "camera.xml"
+    export.write_opencv_xml(result, xml)
+    assert xml.read_text().lstrip().startswith("<?xml")
+    fs = cv2.FileStorage(str(xml), cv2.FILE_STORAGE_READ)
+    assert np.allclose(fs.getNode("camera_matrix").mat(), result.camera_matrix)
+    assert np.allclose(fs.getNode("distortion_coefficients").mat().reshape(-1), result.distortion)
+    assert fs.getNode("avg_reprojection_error").real() == pytest.approx(result.rms_point)
+    errors = fs.getNode("per_view_reprojection_errors").mat().reshape(-1)
+    assert np.allclose(errors, [v.rms_point for v in result.views])
+    names = fs.getNode("image_files")
+    assert names.size() == len(result.views) and names.at(0).string() == "view-00.png"
+    fs.release()
+
 
 def test_project_round_trip(tmp_path, charuco, charuco_set):
     _poses, _images, dets = charuco_set
@@ -174,3 +187,47 @@ def test_boards_of_a_set_are_told_apart_by_their_marker_ids(camera):
     assert "IDs 108 to 161" in wrong.note and "First marker ID 108" in wrong.note
     with pytest.raises(ValueError, match="only has IDs"):
         Target(CHARUCO, 12, 9, 60.0, 45.0, "DICT_5X5_50")
+
+
+def test_names_of_projects_and_exported_files():
+    from plumbline.core.naming import default_name, export_files, safe_name
+
+    assert default_name(1) == "Calibration-001" and default_name(42) == "Calibration-042"
+    assert safe_name('  bench cam: left/right?  ') == "bench-cam-leftright"
+    assert safe_name("...") == "Calibration" and safe_name("con") == "Calibration"
+    assert safe_name("左相机 01") == "左相机-01"
+    one, two = export_files("Calibration-001", 1), export_files("Calibration-001", 2)
+    assert one["report"] == "Calibration-001-report.pdf"
+    assert one["opencv_yaml"] == "Calibration-001-camera.yml"
+    assert two["report"] == "Calibration-001-r2-report.pdf"
+    assert two["ros"] == "Calibration-001-r2-camera_info.yaml"
+    assert one["project"] == two["project"] == "Calibration-001.plumbline"
+    assert one["opencv_xml"] == "Calibration-001-camera.xml"
+    assert two["xlsx"] == "Calibration-001-r2-data.xlsx"
+    assert len(set(one.values()) | set(two.values())) == 13
+
+
+def test_excel_workbook_holds_the_same_numbers(tmp_path, charuco, charuco_set):
+    from openpyxl import load_workbook
+
+    from plumbline.core.export_xlsx import write_xlsx
+
+    _poses, _images, dets = charuco_set
+    result = calibrate(dets, charuco, excluded={4})
+    path = tmp_path / "data.xlsx"
+    write_xlsx(result, dets, path, "bench-cam", 2)
+    wb = load_workbook(path)
+    assert wb.sheetnames == ["Summary", "Images", "Corners"]
+    summary = {row[0]: row[1] for row in wb["Summary"].iter_rows(min_row=2, values_only=True) if row[0]}
+    assert summary["Project"] == "bench-cam" and summary["Revision"] == 2
+    assert summary["fx, px"] == pytest.approx(result.fx)
+    assert summary["k1"] == pytest.approx(result.distortion[0])
+    assert summary["RMS per point, px"] == pytest.approx(result.rms_point)
+    images = list(wb["Images"].iter_rows(min_row=2, values_only=True))
+    assert len(images) == len(dets)
+    assert images[4][4] == "excluded" and images[4][3] is None and images[4][2] > 0
+    assert images[0][2] == pytest.approx(result.views[0].rms_point)
+    corners = list(wb["Corners"].iter_rows(min_row=2, values_only=True))
+    assert len(corners) == result.corner_total
+    total = sum(c[6] ** 2 for c in corners) / len(corners)
+    assert total ** 0.5 == pytest.approx(result.rms_point, rel=1e-6)

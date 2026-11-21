@@ -8,7 +8,7 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-    QGridLayout, QHBoxLayout, QHeaderView, QMessageBox, QProgressBar, QPushButton, QSpinBox,
+    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QSpinBox,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -18,16 +18,20 @@ from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
 from ..core.detect import Detection, detect_file, read_gray
+from ..core.naming import export_files, result_signature, safe_name
+from ..core.export_xlsx import write_xlsx
+from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
 from ..core.targets import CHARUCO, CHECKERBOARD, DICTIONARIES, Target
 from . import theme as T
+from .export_dialog import ExportDialog
+from .report import write_report
 from .widgets import (
     RESIDUAL_GAIN, CoverageMap, ErrorChart, ImageView, LinkLabel, SvgMark, Worker, button, frame,
     label, open_site, rule,
 )
 
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp)"
-GOOD_RMS = 0.5  # px per point; above this the result deserves a second look
 
 
 class StepButton(QPushButton):
@@ -120,6 +124,15 @@ class Workbench(QWidget):
             s.clicked.connect(act)
             h.addWidget(s)
         h.addStretch(1)
+        self.name_btn = QPushButton("")
+        self.name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.name_btn.setToolTip("Rename this project. Exported files carry this name.")
+        self.name_btn.setStyleSheet(
+            f'border: 0; padding: 0 4px; min-height: 0; font-family: "{T.MONO}"; font-size: 13px; '
+            f"font-weight: 500; color: {T.INK_MUTED}; text-align: right;")
+        self.name_btn.clicked.connect(self.rename_project)
+        h.addWidget(self.name_btn)
+        h.addSpacing(16)
         h.addWidget(LinkLabel(T.VISIT, T.SITE, "monolink"))
         return w
 
@@ -540,20 +553,53 @@ class Workbench(QWidget):
         if self.result is None:
             self._say("Calibrate first, then export.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Choose a folder for the calibration files")
-        if not folder:
+        dialog = ExportDialog(self.project, self.result, self)
+        if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
+        self.export_to(dialog.folder, dialog.project_name, dialog.formats())
+
+    def export_to(self, folder: str, name: str | None = None, formats: set[str] | None = None):
+        """Write one revision: the chosen files plus the project file, all named after the project."""
         base = Path(folder)
-        written = ["camera.yml", "camera.json"]
-        export.write_opencv_yaml(self.result, base / "camera.yml")
-        export.write_json(self.result, base / "camera.json")
-        if export.ros_distortion_model(self.result):
-            export.write_ros_camera_info(self.result, base / "camera_info.yaml")
-            written.append("camera_info.yaml")
-        self.project.save(str(base / f"{self.project.name if self.project.path else 'calibration'}{SUFFIX}"))
+        if name:
+            self.project.title = safe_name(name)
+        name = self.project.name
+        formats = set(formats) if formats is not None else {"report", "opencv_yaml", "json", "ros"}
+        signature = result_signature(self.result)
+        revision = self.project.revision_for(signature)
+        files = export_files(name, revision)
+        written = []
+        if "opencv_yaml" in formats:
+            export.write_opencv_yaml(self.result, base / files["opencv_yaml"])
+            written.append(files["opencv_yaml"])
+        if "opencv_xml" in formats:
+            export.write_opencv_xml(self.result, base / files["opencv_xml"])
+            written.append(files["opencv_xml"])
+        if "json" in formats:
+            export.write_json(self.result, base / files["json"])
+            written.append(files["json"])
+        if "ros" in formats and export.ros_distortion_model(self.result):
+            export.write_ros_camera_info(self.result, base / files["ros"], safe_name(name))
+            written.append(files["ros"])
+        if "xlsx" in formats:
+            write_xlsx(self.result, self.project.detections, base / files["xlsx"], name, revision)
+            written.append(files["xlsx"])
+        if "report" in formats:
+            write_report(self.result, self.project.detections, base / files["report"], name, revision)
+            written.append(files["report"])
+        written.append(files["project"])
+        self.project.revision, self.project.export_signature = revision, signature
+        self.project.save(str(base / files["project"]))
         self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point)
-        self._say(f"Saved {', '.join(written)} and the project file to {base}.")
+        self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
         self._refresh()
+
+    def rename_project(self):
+        text, ok = QInputDialog.getText(self, "Project name", "Name used for this project and its exported files:",
+                                        text=self.project.name)
+        if ok and text.strip():
+            self.project.title = safe_name(text)
+            self._refresh()
 
     def _toggle(self, index: int):
         dets = self.project.detections
@@ -643,21 +689,14 @@ class Workbench(QWidget):
         self.chart.set_data(bars, self._current)
 
     def _excluded_error(self, index: int) -> float | None:
-        """Error an excluded image would have under the current result (it took no part in the fit)."""
-        det, r = self.project.detections[index], self.result
-        if not det.usable:
-            return None
-        obj = r.target.object_points()[det.ids].astype(np.float64)
-        ok, rvec, tvec = cv2.solvePnP(obj, det.corners.astype(np.float64), r.camera_matrix, r.distortion)
-        if not ok:
-            return None
-        proj, _ = cv2.projectPoints(obj, rvec, tvec, r.camera_matrix, r.distortion)
-        return float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - det.corners) ** 2, axis=1))))
+        return error_outside_fit(self.result, self.project.detections[index])
 
     def _refresh(self):
         p, r = self.project, self.result
         dets = p.detections
         n = len(p.image_paths)
+        shown = p.name if len(p.name) <= 20 else p.name[:19] + "\u2026"
+        self.name_btn.setText(shown + (f" \u00b7 r{p.revision}" if p.revision else ""))
         keep = self._current
         self.table.blockSignals(True)
         self.table.setRowCount(n)
@@ -709,7 +748,7 @@ class Workbench(QWidget):
             ("done" if dets else "next" if n and t else "off",
              f"{good} good · {len(dets) - good} to check" if dets else "Find the corners"),
             ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
-            ("next" if r else "off", "Parameters"),
+            ("next" if r else "off", "Parameters and report"),
         ]
         for step, (kind, status) in zip(self.steps, states):
             step.set_state(kind, status)
@@ -756,26 +795,8 @@ class Workbench(QWidget):
         lay.setColumnMinimumWidth(2, 28)
 
     def _make_findings(self, r: CalibrationResult, share: float):
-        out = []
-        if r.rms_point <= GOOD_RMS:
-            out.append(("PASS", T.GREEN_TEXT, f"Error is low ({r.rms_point:.2f} px)."))
-        else:
-            out.append(("CHECK", T.RED_TEXT, f"Error is {r.rms_point:.2f} px. Look for blurred images, "
-                        "glare on the target, or wrong target sizes."))
-        flagged = suggest_exclusions(r)
-        if flagged:
-            names = ", ".join(Path(self.project.image_paths[i]).stem for i in flagged[:3])
-            out.append(("CHECK", T.RED_TEXT, f"{names} stand well above the rest. Click their bars to exclude them."))
-        if share < 0.7:
-            out.append(("CHECK", T.RED_TEXT, f"Corners cover {share * 100:.0f} % of the image. "
-                        "Add views that reach the empty cells in the coverage map."))
-        else:
-            out.append(("PASS", T.GREEN_TEXT, f"Corners cover {share * 100:.0f} % of the image."))
-        if len(r.views) < 10:
-            out.append(("NOTE", T.INK_MUTED, f"Only {len(r.views)} images in use. 15 to 30 give a steadier result."))
-        if r.excluded:
-            out.append(("NOTE", T.INK_MUTED, f"{len(r.excluded)} image{'s are' if len(r.excluded) != 1 else ' is'} excluded by you."))
-        return out
+        colors = {PASS: T.GREEN_TEXT, CHECK: T.RED_TEXT, NOTE: T.INK_MUTED}
+        return [(tag, colors[tag], text) for tag, text in findings(r, share)]
 
     def _fill_findings(self, items):
         lay = self.findings
