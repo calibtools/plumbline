@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from ..core import export
 from ..core.calibrate import CalibrationResult
-from ..core.naming import export_files, result_signature, safe_name
+from ..core.naming import export_files, result_signature, rig_files, rig_signature, safe_name
 from ..core.project import Project
 from . import theme as T
 from .widgets import button, frame, label, rule
@@ -32,15 +32,16 @@ KINDS = (
 
 
 class ExportDialog(QDialog):
-    def __init__(self, project: Project, result: CalibrationResult, parent=None):
+    def __init__(self, project: Project, result: CalibrationResult, parent=None, rig=None):
         super().__init__(parent)
         self.setWindowTitle("Export")
         self.setModal(True)
         self.setFixedWidth(640)
         self.setStyleSheet(f"QDialog {{ background: {T.PAPER}; }}")
-        self._project, self._result = project, result
-        self._revision = project.revision_for(result_signature(result))
-        self._ros = export.ros_distortion_model(result) is not None
+        self._project, self._result, self._rig = project, result, rig
+        self._revision = project.revision_for(rig_signature(rig) if rig is not None else result_signature(result))
+        cameras = (rig.first, rig.second) if rig is not None else (result,)
+        self._ros = all(export.ros_distortion_model(c) is not None for c in cameras)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(28, 20, 28, 20)
@@ -167,8 +168,12 @@ class ExportDialog(QDialog):
         return {k for k, box in self._checks.items() if box.isChecked()}
 
     def file_names(self) -> dict[str, str]:
-        files = export_files(self.project_name, self._revision)
-        return {k: v for k, v in files.items() if k in self.formats()}
+        """The files to be written. With two cameras: camera 1's names, and the two files about both."""
+        files = export_files(self.project_name, self._revision, 1 if self._rig is not None else None)
+        chosen = {k: v for k, v in files.items() if k in self.formats()}
+        if self._rig is not None:
+            chosen.update(rig_files(self.project_name, self._revision))
+        return chosen
 
     @property
     def recheck_months(self) -> int:
@@ -199,7 +204,8 @@ class ExportDialog(QDialog):
         if self._checks["example"].isChecked() and not self._checks["opencv_yaml"].isChecked():
             self._checks["opencv_yaml"].setChecked(True)  # the example reads this file
             return
-        files = export_files(self.project_name, self._revision)
+        files = export_files(self.project_name, self._revision, 1 if self._rig is not None else None)
+        files["project"] = export_files(self.project_name, self._revision)["project"]
         folder = Path(self.folder) if self.folder else None
         folder_ok = bool(folder and folder.is_dir())
         existing = 0
@@ -223,6 +229,11 @@ class ExportDialog(QDialog):
             )
         else:
             self.revision_note.setText("First export of this project.")
+        if self._rig is not None:
+            both = rig_files(self.project_name, self._revision)
+            self.revision_note.setText(
+                self.revision_note.text() + " Two cameras: the files ticked below are written for cam1 and again "
+                f"for cam2. {both['rig_json']} and {both['rig_yaml']} say how camera 2 sits relative to camera 1.")
         notes = []
         if changed:
             notes.append(f"Characters that cannot be in a file name were removed: {self.project_name}.")

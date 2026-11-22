@@ -20,7 +20,7 @@ from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
 from ..core.detect import Detection, detect_file, read_gray
-from ..core.naming import export_files, result_signature, safe_name
+from ..core.naming import export_files, result_signature, rig_files, rig_signature, safe_name
 from ..core.export_code import write_example, write_maps
 from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
@@ -1000,20 +1000,22 @@ class Workbench(QWidget):
         self._start(lambda _p: calibrate(dets, target, options, excluded), done, "Calibrating")
 
     def export_all(self):
-        if self.project.second_camera:
-            self._say("Exporting a project with two cameras is not in this version yet.")
-            return
-        if self.result is None:
+        rig = self.rig if self.project.second_camera else None
+        if self.result is None or (self.project.second_camera and rig is None):
             self._say("Calibrate first, then export.")
             return
-        dialog = ExportDialog(self.project, self.result, self)
+        dialog = ExportDialog(self.project, self.result, self, rig=rig)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
         self.export_to(dialog.folder, dialog.project_name, dialog.formats(), dialog.recheck_months)
 
     def export_to(self, folder: str, name: str | None = None, formats: set[str] | None = None,
                   recheck_months: int | None = None):
-        """Write one revision: the chosen files plus the project file, all named after the project."""
+        """Write one revision: the chosen files plus the project file, all named after the project.
+
+        With two cameras every chosen file is written once per camera (cam1, cam2), and two more
+        files say how camera 2 sits relative to camera 1.
+        """
         base = Path(folder)
         if name:
             self.project.title = safe_name(name)
@@ -1021,45 +1023,70 @@ class Workbench(QWidget):
         formats = set(formats) if formats is not None else {"report", "opencv_yaml", "json", "ros"}
         if "example" in formats:
             formats.add("opencv_yaml")  # the example reads this file
-        signature = result_signature(self.result)
+        rig = self.rig if self.project.second_camera else None
+        signature = rig_signature(rig) if rig is not None else result_signature(self.result)
         revision = self.project.revision_for(signature)
-        files = export_files(name, revision)
         written = []
-        if "opencv_yaml" in formats:
-            export.write_opencv_yaml(self.result, base / files["opencv_yaml"])
-            written.append(files["opencv_yaml"])
-        if "opencv_xml" in formats:
-            export.write_opencv_xml(self.result, base / files["opencv_xml"])
-            written.append(files["opencv_xml"])
-        if "json" in formats:
-            export.write_json(self.result, base / files["json"])
-            written.append(files["json"])
-        if "ros" in formats and export.ros_distortion_model(self.result):
-            export.write_ros_camera_info(self.result, base / files["ros"], safe_name(name))
-            written.append(files["ros"])
-        if "xlsx" in formats:
-            write_xlsx(self.result, self.project.detections, base / files["xlsx"], name, revision)
-            written.append(files["xlsx"])
-        if "maps" in formats:
-            write_maps(self.result, base / files["maps"])
-            written.append(files["maps"])
-        if "example" in formats:
-            write_example(self.result, base / files["example"], files["opencv_yaml"],
-                          files["maps"] if "maps" in formats else None)
-            written.append(files["example"])
-        if "report" in formats:
-            write_report(self.result, self.project.detections, base / files["report"], name, revision)
-            written.append(files["report"])
-        written.append(files["project"])
+        if rig is not None:
+            for cam, result, dets in ((1, rig.first, self.project.detections), (2, rig.second, self.project.second_detections)):
+                written += self._write_camera(result, dets, base, export_files(name, revision, cam), formats,
+                                              f"{name} · camera {cam}", revision, f"{safe_name(name)}_cam{cam}",
+                                              f"Camera {cam} of 2")
+            both = rig_files(name, revision)
+            own = tuple(export_files(name, revision, cam)["json" if "json" in formats else "opencv_yaml"] for cam in (1, 2))
+            export.write_rig_json(rig, base / both["rig_json"],
+                                  own if formats & {"json", "opencv_yaml"} else None)
+            export.write_rig_yaml(rig, base / both["rig_yaml"])
+            written += [both["rig_json"], both["rig_yaml"]]
+        else:
+            written += self._write_camera(self.result, self.project.detections, base, export_files(name, revision),
+                                          formats, name, revision, safe_name(name))
+        project_file = export_files(name, revision)["project"]
+        written.append(project_file)
         self.project.revision, self.project.export_signature = revision, signature
         self.project.exported_on = date.today().isoformat()
         if recheck_months is not None:
             self.project.recheck_months = recheck_months
-        self.project.save(str(base / files["project"]))
-        self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point,
-                                self.project.due_date())
-        self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
+        self.project.save(str(base / project_file))
+        self.project_saved.emit(self.project.path, self.project.target.describe(),
+                                rig.rms_point if rig is not None else self.result.rms_point, self.project.due_date())
+        if rig is not None:   # too many names for one line: the count, and where they are
+            self._say(f"Revision {revision} saved to {base}: {len(written)} files, for camera 1, camera 2 and both.")
+        else:
+            self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
         self._refresh()
+
+    @staticmethod
+    def _write_camera(result, detections, base: Path, files: dict, formats: set, title: str, revision: int,
+                      ros_name: str, kind: str = "Single camera") -> list[str]:
+        """The chosen files for one camera. Returns the names written."""
+        written = []
+        if "opencv_yaml" in formats:
+            export.write_opencv_yaml(result, base / files["opencv_yaml"])
+            written.append(files["opencv_yaml"])
+        if "opencv_xml" in formats:
+            export.write_opencv_xml(result, base / files["opencv_xml"])
+            written.append(files["opencv_xml"])
+        if "json" in formats:
+            export.write_json(result, base / files["json"])
+            written.append(files["json"])
+        if "ros" in formats and export.ros_distortion_model(result):
+            export.write_ros_camera_info(result, base / files["ros"], ros_name)
+            written.append(files["ros"])
+        if "xlsx" in formats:
+            write_xlsx(result, detections, base / files["xlsx"], title, revision)
+            written.append(files["xlsx"])
+        if "maps" in formats:
+            write_maps(result, base / files["maps"])
+            written.append(files["maps"])
+        if "example" in formats:
+            write_example(result, base / files["example"], files["opencv_yaml"],
+                          files["maps"] if "maps" in formats else None)
+            written.append(files["example"])
+        if "report" in formats:
+            write_report(result, detections, base / files["report"], title, revision, kind)
+            written.append(files["report"])
+        return written
 
     def rename_project(self):
         text, ok = QInputDialog.getText(self, "Project name", "Name used for this project and its exported files:",
@@ -1294,7 +1321,7 @@ class Workbench(QWidget):
                 ("done" if dets else "next" if n_images and t else "off",
                  f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
                 ("done" if rig else "next" if good else "off", f"RMS {rig.rms_point:.2f} px" if rig else "Solve the cameras"),
-                ("off", "Not in this version"),
+                ("next" if rig else "off", "Files and report"),
             ]
         else:
             states = self._single_states(t, n, dets, good, r)
