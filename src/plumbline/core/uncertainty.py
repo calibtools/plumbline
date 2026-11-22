@@ -184,3 +184,115 @@ def parameter_uncertainty(K, dist, options: ModelOptions, views) -> Uncertainty 
     std = np.sqrt(var)
     return Uncertainty(names, std, cov / np.outer(std, std), float(np.sqrt(sse / dof)), int(dof),
                        float(K[1, 1] / K[0, 0]))
+
+
+@dataclass
+class ProjectionUncertainty:
+    """How far a viewing direction may land from where the model puts it, across the image."""
+
+    xs: np.ndarray        # pixel x of the cell centres, (cols,)
+    ys: np.ndarray        # pixel y of the cell centres, (rows,)
+    sd: np.ndarray        # (rows, cols) standard deviation in px along the worst direction; NaN where undefined
+
+    @property
+    def median(self) -> float:
+        return float(np.nanmedian(self.sd))
+
+    @property
+    def worst(self) -> float:
+        return float(np.nanmax(self.sd))
+
+    def to_dict(self) -> dict:
+        return {
+            "x": [float(v) for v in self.xs],
+            "y": [float(v) for v in self.ys],
+            "standard_deviation_px": [[None if not np.isfinite(v) else float(v) for v in row] for row in self.sd],
+        }
+
+
+def _grid(width: int, height: int, cols: int):
+    rows = max(2, int(round(cols * height / width)))
+    xs = (np.arange(cols) + 0.5) * width / cols
+    ys = (np.arange(rows) + 0.5) * height / rows
+    return xs, ys, np.array([(x, y) for y in ys for x in xs], np.float64)
+
+
+def _rotation_slopes(rays, K, dist, fisheye) -> np.ndarray:
+    """How the projection of each direction moves when the camera turns a little: (N, 2, 3)."""
+    out = np.zeros((len(rays), 2, 3))
+    zero, step = np.zeros(3), 1e-6
+    for k in range(3):
+        turn = np.zeros(3)
+        turn[k] = step
+        out[:, :, k] = (lens.project(rays, turn, zero, K, dist, fisheye)
+                        - lens.project(rays, -turn, zero, K, dist, fisheye)) / (2 * step)
+    return out
+
+
+def remove_common_rotation(shifts: np.ndarray, turn: np.ndarray, middle: np.ndarray) -> np.ndarray:
+    """Take out of a field of pixel shifts (N, 2) the part a small turn of the camera explains.
+
+    Two calibrations that differ only by a slight turn of the camera frame describe
+    the same lens. The turn is fitted over the middle of the image and removed, so
+    that what is left is a difference in the lens model itself.
+    """
+    A = turn[middle].reshape(-1, 3)
+    b = shifts[middle].reshape(-1)
+    r, *_ = np.linalg.lstsq(A, b, rcond=None)
+    return shifts - turn @ r
+
+
+def projection_uncertainty(K, dist, options: ModelOptions, uncertainty: Uncertainty,
+                           width: int, height: int, cols: int = 24) -> ProjectionUncertainty:
+    """Carry the uncertainty of the camera parameters over to the image.
+
+    For each cell: take the viewing direction the model assigns to that pixel,
+    and ask how much its projection moves when the parameters move within their
+    uncertainty. The answer is small where the calibration images put many
+    points and grows where the model is only extrapolating.
+
+    A shift of the image centre is almost the same thing as a slight turn of the
+    whole camera, and a turn changes nothing about the lens. So the part of the
+    movement that one common turn explains (fitted over the middle of the image)
+    is taken out first; mrcal does the same when it compares two models.
+    """
+    K = np.asarray(K, np.float64)
+    dist = np.asarray(dist, np.float64).reshape(-1)
+    fisheye = options.fisheye
+    names = uncertainty.names
+    theta = _values(names, K, dist, fisheye)
+    cov = uncertainty.correlation * np.outer(uncertainty.std, uncertainty.std)
+    xs, ys, px = _grid(width, height, cols)
+    rays = lens.pixel_directions(px, K, dist, fisheye)
+    ok = np.isfinite(rays).all(axis=1) & (rays[:, 2] > 1e-6)
+    zero = np.zeros(3)
+    back = np.full_like(px, np.nan)
+    back[ok] = lens.project(rays[ok], zero, zero, K, dist, fisheye)
+    ok &= np.linalg.norm(back - px, axis=1) < 0.01   # cells the lens model can actually reach
+    rays, cells = rays[ok], px[ok]
+    steps = np.array([1e-3 if n in ("f", "fx", "fy", "cx", "cy") else 1e-6 for n in names])
+
+    def proj(values):
+        Kv, dv = _apply(names, values, K, dist, fisheye)
+        return lens.project(rays, zero, zero, Kv, dv, fisheye)
+
+    J = np.zeros((len(rays), 2, len(names)))
+    for k in range(len(names)):
+        d = np.zeros(len(names))
+        d[k] = steps[k]
+        J[:, :, k] = (proj(theta + d) - proj(theta - d)) / (2 * steps[k])
+    turn = _rotation_slopes(rays, K, dist, fisheye)
+    middle = middle_cells(cells, width, height)
+    for k in range(len(names)):
+        J[:, :, k] = remove_common_rotation(J[:, :, k], turn, middle)
+    spread = J @ cov @ np.transpose(J, (0, 2, 1))          # 2 x 2 covariance per cell
+    worst = np.sqrt(np.maximum(np.linalg.eigvalsh(spread)[:, -1], 0.0))
+    sd = np.full(len(px), np.nan)
+    sd[ok] = worst
+    return ProjectionUncertainty(xs, ys, sd.reshape(len(ys), len(xs)))
+
+
+def middle_cells(cells: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Cells within a quarter of the shorter image side from the image centre."""
+    centre = np.array([width / 2, height / 2])
+    return np.linalg.norm(cells - centre, axis=1) <= 0.25 * min(width, height)

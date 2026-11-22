@@ -241,13 +241,38 @@ class Workbench(QWidget):
         b.addLayout(left, 1)
         right = QVBoxLayout()
         right.setSpacing(6)
-        right.addWidget(label("COVERAGE", "eyebrow"))
+        heads = QHBoxLayout()
+        heads.setSpacing(14)
+        self.map_tabs = []
+        for text, tip in (("COVERAGE", "Where in the image the detected points fell"),
+                          ("UNCERTAINTY", "How well the result is pinned down across the image")):
+            b_ = QPushButton(text)
+            b_.setCursor(Qt.CursorShape.PointingHandCursor)
+            b_.setToolTip(tip)
+            b_.setCheckable(True)
+            b_.clicked.connect(lambda _on, which=len(self.map_tabs): self._show_map(which))
+            heads.addWidget(b_)
+            self.map_tabs.append(b_)
+        heads.addStretch(1)
+        right.addLayout(heads)
         self.coverage = CoverageMap()
         right.addWidget(self.coverage)
+        self._show_map(0)
         right.addStretch(1)
         b.addLayout(right)
         v.addWidget(bottom)
         return w
+
+    def _show_map(self, which: int) -> None:
+        """Switch the small map between point coverage and projection uncertainty."""
+        for i, b_ in enumerate(self.map_tabs):
+            b_.setChecked(i == which)
+            ink = T.INK if i == which else T.INK_MUTED
+            b_.setStyleSheet(
+                f'border: 0; border-bottom: 2px solid {T.INK if i == which else "transparent"}; '
+                f'background: transparent; padding: 0 0 2px 0; min-height: 0; color: {ink}; '
+                f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
+        self.coverage.set_mode(which == 1)
 
     def _right(self) -> QWidget:
         w = QWidget()
@@ -925,6 +950,8 @@ class Workbench(QWidget):
             share = 0.0
             self.coverage.set_grid(None)
         self._refresh_chart()
+        res = self.result
+        self.coverage.set_uncertainty(res.projection.sd if res is not None and res.projection is not None else None)
 
         # Header steps.
         t = p.target

@@ -11,6 +11,7 @@ from .detect import Detection
 
 GOOD_RMS = 0.5  # px per point; above this the result deserves a second look
 LOOSE_CENTRE_SHARE = 0.002  # of the image width; beyond it the principal point is poorly determined
+LOOSE_EDGE_PX = 0.5  # projection uncertainty anywhere in the image above which more views are advised
 LOOSE_FOCAL_PERCENT = 0.2  # above this share of the focal length, more or better views are advised
 PASS, CHECK, NOTE = "PASS", "CHECK", "NOTE"
 
@@ -37,6 +38,11 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
     else:
         out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
     u = r.uncertainty
+    pu = r.projection
+    if pu is not None and pu.worst >= LOOSE_EDGE_PX:
+        out.append((CHECK, f"Towards the edge of the image the result is only good to ±{pu.worst:.1f} px "
+                           f"(±{pu.median:.2f} px over most of it). Add views that put the target there; "
+                           "see the Uncertainty map."))
     centre = max((u.std_of(k) or 0.0) for k in ("cx", "cy")) if u is not None else 0.0
     if centre > LOOSE_CENTRE_SHARE * r.image_width:
         out.append((CHECK, f"The image centre is only pinned down to ±{centre:.1f} px. The lens model may have "

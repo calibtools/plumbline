@@ -122,3 +122,78 @@ def test_too_many_lens_terms_show_up_as_a_loose_image_centre(charuco, charuco_se
     assert heavy.uncertainty.std_of("cx") > 5 * plain.uncertainty.std_of("cx")
     assert any(tag == CHECK and "fewer" in text for tag, text in findings(heavy, 0.9))
     assert not any("image centre" in text for _tag, text in findings(plain, 0.9))
+
+
+@pytest.mark.parametrize("wide", [False, True])
+def test_projection_map_matches_repeated_calibrations(wide, charuco, camera, fisheye_camera):
+    """Across the image, results from repeated calibrations scatter as the map says."""
+    from plumbline.core.uncertainty import (
+        _grid, _rotation_slopes, middle_cells, projection_uncertainty, remove_common_rotation,
+    )
+
+    cam = fisheye_camera if wide else camera
+    poses = synth.sample_poses(charuco, cam, 20, 11)
+    rng = np.random.default_rng(9)
+    options = ModelOptions(fisheye=wide)
+    runs = [calibrate(_noisy_views(charuco, cam, poses, 0.15, rng, wide), charuco, options) for _ in range(80)]
+
+    cols = 12
+    maps = [projection_uncertainty(r.camera_matrix, r.distortion, options, r.uncertainty,
+                                   cam.width, cam.height, cols) for r in runs]
+    said = np.mean([m.sd for m in maps], axis=0)
+    assert said.shape == (9, 12) and np.all(np.isfinite(said))
+
+    # The same directions through every result, minus what a common turn explains.
+    _xs, _ys, cells = _grid(cam.width, cam.height, cols)
+    rays = lens.pixel_directions(cells, cam.K, cam.dist, wide)
+    turn = _rotation_slopes(rays, cam.K, cam.dist, wide)
+    middle = middle_cells(cells, cam.width, cam.height)
+    zero = np.zeros(3)
+    moved = np.array([remove_common_rotation(
+        lens.project(rays, zero, zero, r.camera_matrix, r.distortion, wide) - cells, turn, middle) for r in runs])
+    centred = moved - moved.mean(axis=0)
+    seen = np.array([np.sqrt(np.linalg.eigvalsh(np.cov(centred[:, i, :].T))[-1]) for i in range(len(cells))])
+    ratio = said.reshape(-1) / seen
+    assert 0.8 < np.median(ratio) < 1.25
+    assert np.all((ratio > 0.6) & (ratio < 1.6)), np.round(ratio.reshape(9, 12), 2)
+
+    # The map is lowest in the middle and highest at the edge.
+    assert said[4, 5] < 0.5 * said.max() and said.max() == pytest.approx(max(said[0].max(), said[-1].max()), rel=0.3)
+
+
+def test_map_is_shown_and_exported(tmp_path, charuco, charuco_set, fisheye_set):
+    import json
+
+    from plumbline.core import export
+    from plumbline.core.findings import CHECK, findings
+
+    _poses, _images, dets = charuco_set
+    result = calibrate(dets, charuco)
+    pu = result.projection
+    assert pu is not None and pu.sd.shape == (18, 24) and pu.worst < 0.5
+    assert not any("edge of the image" in text for _tag, text in findings(result, 0.9))
+    export.write_json(result, tmp_path / "camera.json")
+    data = json.loads((tmp_path / "camera.json").read_text())["projection_uncertainty"]
+    assert len(data["standard_deviation_px"]) == 18 and len(data["x"]) == 24
+
+    # The wide-lens sample leaves the corners empty; the map and the findings both say so.
+    wide = calibrate(fisheye_set[2], charuco, ModelOptions(fisheye=True))
+    assert wide.projection.worst > 0.5 > wide.projection.median
+    assert any(tag == CHECK and "edge of the image" in text for tag, text in findings(wide, 0.6))
+
+    pytest.importorskip("PySide6")
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from plumbline.app import create_app
+    from plumbline.ui.widgets import CoverageMap
+
+    create_app([])
+    view = CoverageMap()
+    view.set_grid(np.ones((9, 12), int), 1.0)
+    covered = view.grab().toImage()
+    view.set_uncertainty(wide.projection.sd)
+    assert view.grab().toImage() == covered          # still showing coverage
+    view.set_mode(True)
+    assert view.grab().toImage() != covered and "one standard deviation" in view.toolTip()
+    view.set_uncertainty(None)                        # no result: says so instead of drawing
+    view.grab()
