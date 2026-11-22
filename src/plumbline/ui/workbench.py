@@ -36,7 +36,7 @@ from ..core.targets import (
 )
 from . import theme as T
 from .export_dialog import ExportDialog
-from .report import write_report, write_rig_report
+from .report import write_report, write_rig_report, write_group_report
 from .widgets import (
     RESIDUAL_GAIN, CoverageMap, ErrorChart, ImageView, LinkLabel, SvgMark, Worker, button, frame,
     label, open_site, rule,
@@ -1209,6 +1209,11 @@ class Workbench(QWidget):
             export.write_group_json(group, base / both["rig_json"], own if formats & {"json", "opencv_yaml"} else None)
             export.write_group_yaml(group, base / both["rig_yaml"])
             written += [both["rig_json"], both["rig_yaml"]]
+            if "report" in formats:
+                write_group_report(group, [self.project.detections_of(cam) for cam in range(count)],
+                                   base / both["rig_report"], name, revision,
+                                   [export_files(name, revision, cam)["report"] for cam in range(1, count + 1)])
+                written.append(both["rig_report"])
         else:
             written += self._write_camera(self.result, self.project.detections, base, export_files(name, revision),
                                           formats, name, revision, safe_name(name))

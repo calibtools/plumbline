@@ -177,7 +177,7 @@ class ExportDialog(QDialog):
             chosen.update(rig_files(self.project_name, self._revision))
         elif self._group is not None:      # three or more cameras: the two files about all of them
             both = rig_files(self.project_name, self._revision)
-            chosen.update({k: both[k] for k in ("rig_json", "rig_yaml")})
+            chosen.update({k: both[k] for k in ("rig_json", "rig_yaml", "rig_report")})
         return chosen
 
     @property
@@ -247,7 +247,8 @@ class ExportDialog(QDialog):
             self.revision_note.setText(
                 self.revision_note.text() + f" {k} cameras: the files ticked below are written once for each camera, "
                 f"cam1 to cam{k}. {both['rig_json']} and {both['rig_yaml']} say where each camera sits relative to "
-                "camera 1. A report covering all cameras and row-aligned images are written for two cameras only.")
+                "camera 1; with the report ticked, one more report covers all cameras. Row-aligned images are written "
+                "for two cameras only.")
         notes = []
         if changed:
             notes.append(f"Characters that cannot be in a file name were removed: {self.project_name}.")

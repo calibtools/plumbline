@@ -193,6 +193,9 @@ def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
     bench.export_to(str(out), formats={"json"})
     name = bench.project.name
     assert all((out / f"{name}-cam{c}-camera.json").exists() for c in (1, 2, 3))
+    from plumbline.ui.report import write_group_report
+    pages = write_group_report(bench.group, [bench.project.detections_of(c) for c in range(3)], out / "all.pdf", name, 1)
+    assert pages == 3 and (out / "all.pdf").stat().st_size > 20_000
     data = json.loads((out / f"{name}-cameras.json").read_text())
     assert data["camera_count"] == 3 and (out / f"{name}-cameras.yml").exists()
     assert not list(out.glob("*rectify*")) and not list(out.glob("*cameras-report*"))
