@@ -113,6 +113,7 @@ class ErrorChart(QWidget):
 
     toggled = Signal(int)
     selected = Signal(int)
+    per = "image"   # what one bar stands for: an image, or a pair of images with two cameras
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -179,7 +180,7 @@ class ErrorChart(QWidget):
         p.drawLine(QPointF(plot.left(), plot.bottom()), QPointF(plot.right(), plot.bottom()))
         p.setPen(QColor(T.INK_MUTED))
         p.drawText(QRectF(plot.left(), h - 18, plot.width(), 16), Qt.AlignmentFlag.AlignLeft,
-                   "px per image · click a bar to exclude or restore it")
+                   f"px per {self.per} · click a bar to exclude or restore it")
 
     def _hit(self, pos) -> int | None:
         for r, idx in self._rects:

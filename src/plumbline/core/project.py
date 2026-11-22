@@ -49,6 +49,20 @@ class Project:
     export_signature: str | None = None  # fingerprint of the result of the last export
     exported_on: str | None = None  # ISO date of the last export, taken as the calibration date
     recheck_months: int = 0  # remind to calibrate again after this many months, 0 = no reminder
+    # A second camera looking at the same board. Image i of camera 2 was taken together with image i of camera 1.
+    second_camera: bool = False
+    second_image_paths: list[str] = field(default_factory=list)
+    second_detections: list[Detection] = field(default_factory=list)
+
+    def paths_of(self, camera: int) -> list[str]:
+        return self.second_image_paths if camera else self.image_paths
+
+    def detections_of(self, camera: int) -> list[Detection]:
+        return self.second_detections if camera else self.detections
+
+    @property
+    def pair_count(self) -> int:
+        return max(len(self.image_paths), len(self.second_image_paths)) if self.second_camera else len(self.image_paths)
 
     def due_date(self) -> str | None:
         """ISO date from which this camera should be calibrated again, or None."""
@@ -80,6 +94,9 @@ class Project:
             "export_signature": self.export_signature,
             "exported_on": self.exported_on,
             "recheck_months": self.recheck_months,
+            **({"second_camera": {"image_paths": list(self.second_image_paths),
+                                  "detections": [d.to_dict() for d in self.second_detections]}}
+               if self.second_camera else {}),
         }
 
     def save(self, path: str | None = None) -> None:
@@ -107,4 +124,7 @@ class Project:
             export_signature=data.get("export_signature"),
             exported_on=data.get("exported_on"),
             recheck_months=int(data.get("recheck_months") or 0),
+            second_camera="second_camera" in data,
+            second_image_paths=list((data.get("second_camera") or {}).get("image_paths", [])),
+            second_detections=[Detection.from_dict(d) for d in (data.get("second_camera") or {}).get("detections", [])],
         )
