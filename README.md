@@ -23,7 +23,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Calib.Tools boards by part number: pick one and the pattern settings fill in
 - Project files, built-in sample images
 
-In progress: two cameras. The solve is in `plumbline.core.rig` (how the second camera sits relative to the first, with ± on distance and angle); the window does not show it yet.
+Two cameras (first version): drop or add the images of both cameras together and the file names tell them apart and pair them (`left_001` / `right_001`, `cam1-07` / `cam2-07`, `0007_0` / `0007_1`, or two folders with the same names inside). A second camera can also be added by hand and given its images. The result shows how camera 2 sits relative to camera 1 (distance, angle, position, each with ±) and each camera's own parameters. Both cameras use the same lens model settings. Exporting a two-camera project is not there yet.
 
 Not yet: signed installers, other wide-lens models, uncertainty, several cameras.
 
