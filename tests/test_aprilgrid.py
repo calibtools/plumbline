@@ -9,7 +9,7 @@ import pytest
 
 from plumbline.core import synth
 from plumbline.core.calibrate import ModelOptions, calibrate, projection_difference
-from plumbline.core.catalog import find_board
+from plumbline.core.catalog import find_board, stock_boards
 from plumbline.core.detect import detect, refine_tag_corners
 from plumbline.core.targets import APRILGRID, Target
 
@@ -54,7 +54,7 @@ def test_layout_is_kalibrs(grid):
 def test_the_sites_own_drawing_is_read_as_laid_out():
     """The drawing calib.tools shows for CT-APR-P-200X150-T36, made by the site's code, not by Plumbline.
 
-    It is 8 px per mm with a 3 mm margin; the block of tags starts 6.25 mm from the left
+    It is 8 px per mm with a 4.5 mm margin; the block of tags starts 6.25 mm from the left
     edge of the board and 13.75 mm from its top.
     """
     board = find_board("CT-APR-P-200X150-T36").target
@@ -62,25 +62,21 @@ def test_the_sites_own_drawing_is_read_as_laid_out():
     img = cv2.imread(str(DATA / "CT-APR-P-200X150-T36.png"), cv2.IMREAD_GRAYSCALE)
     det = detect(img, board)
     assert det.count == 96 and sorted(det.ids.tolist()) == list(range(96))
-    mm = (det.corners + 0.5) / 8 - 3 - np.array([6.25, 13.75])
+    mm = (det.corners + 0.5) / 8 - 4.5 - np.array([6.25, 13.75])
     error_px = np.linalg.norm(mm - board.object_points()[det.ids][:, :2], axis=1) * 8
     # Every tag sits where the layout says, in the corner order the layout says.
-    # One corner is off: the drawing puts its origin dot on the bottom-left corner of tag 0.
-    off = np.nonzero(error_px > 0.1)[0]
-    assert [int(det.ids[i]) for i in off] == [1]
-    assert np.median(error_px) < 0.02
+    assert error_px.max() < 0.02
 
 
 def test_rendered_tags_match_the_sites_drawing():
     """Plumbline's own picture of the board, used for every other test, is the same pattern."""
     board = find_board("CT-APR-P-200X150-T36").target
     site = cv2.imread(str(DATA / "CT-APR-P-200X150-T36.png"), cv2.IMREAD_GRAYSCALE)
-    x0, y0 = int((6.25 + 3) * 8), int((13.75 + 3) * 8)
+    x0, y0 = int((6.25 + 4.5) * 8), int((13.75 + 4.5) * 8)
     ours, _origin = synth.board_texture(board, margin_squares=0)
     h, w = ours.shape
     theirs = site[y0:y0 + h, x0:x0 + w]
     different = np.abs(ours.astype(int) - theirs.astype(int)) > 128
-    different[-12:, :12] = False  # the origin dot of the drawing
     assert different.mean() < 0.002  # only the anti-aliased rim of the cells
 
 
@@ -179,3 +175,18 @@ def test_aprilgrid_in_the_window(tmp_path, grid_set):
     bench.marker.setValue(10.0)
     assert bench.project.target.part_number is None
     QSettings().setValue("project_counter", 0)
+
+
+def test_stock_aprilgrids_fit_their_boards():
+    """Each stock AprilGrid is narrower and lower than the board it is printed on."""
+    seen = 0
+    for board in stock_boards():
+        if board.target.kind != APRILGRID:
+            continue
+        seen += 1
+        width, height = (float(v) for v in board.part_number.split("-")[3].split("X"))
+        assert board.target.width_mm < width and board.target.height_mm < height, board.part_number
+    assert seen >= 5
+    big = find_board("CT-APR-P-600X400-T36").target
+    assert (big.squares_x, big.squares_y) == (10, 6)
+    assert (big.width_mm, big.height_mm) == pytest.approx((571.5, 337.5))

@@ -35,24 +35,21 @@ def test_layout_is_opencvs_gridboard(grid):
 def test_a_drawing_made_by_the_site_is_read_as_laid_out(grid):
     """A 6 x 4 grid drawn by the calib.tools generator code (pitch 30 mm, markers 22 mm, IDs from 10).
 
-    8 px per mm with a 3 mm margin; the block of markers starts 14 mm from the left edge
+    8 px per mm with a 4.5 mm margin; the block of markers starts 14 mm from the left edge
     of the 200 x 150 mm board and 19 mm from its top.
     """
     img = cv2.imread(str(DATA / "aruco-grid-6x4-30-22-from-10.png"), cv2.IMREAD_GRAYSCALE)
     det = detect(img, grid)
     assert det.count == 96 and sorted(det.ids.tolist()) == list(range(96))
-    mm = (det.corners + 0.5) / 8 - 3 - np.array([14.0, 19.0])
+    mm = (det.corners + 0.5) / 8 - 4.5 - np.array([14.0, 19.0])
     error_px = np.linalg.norm(mm - grid.object_points()[det.ids][:, :2], axis=1) * 8
-    # One corner is off: the drawing puts its origin dot on the top-left corner of the first marker.
-    off = np.nonzero(error_px > 0.1)[0]
-    assert [int(det.ids[i]) for i in off] == [0]
-    assert np.median(error_px) < 0.02
+    assert error_px.max() < 0.02
 
     ours, _origin = synth.board_texture(grid, margin_squares=0)
     h, w = ours.shape
-    theirs = img[(19 + 3) * 8:(19 + 3) * 8 + h, (14 + 3) * 8:(14 + 3) * 8 + w]
+    y0, x0 = int((19 + 4.5) * 8), int((14 + 4.5) * 8)
+    theirs = img[y0:y0 + h, x0:x0 + w]
     different = np.abs(ours.astype(int) - theirs.astype(int)) > 128
-    different[:12, :12] = False  # the origin dot of the drawing
     assert different.mean() < 0.002
 
 
