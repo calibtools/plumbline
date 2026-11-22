@@ -163,7 +163,16 @@ def test_an_estimated_board_shape_is_used_for_both_cameras(charuco, camera):
     # Taken as flat, a board that sags by 1 mm puts camera 2 about 2 mm and half a degree off.
     assert off(flat)[0] > 1.0 and off(flat)[1] > 0.2
     assert off(free)[0] < 0.6 and off(free)[1] < 0.1 and free.rms_point < 0.15
-    assert any(tag == NOTE and "does not cover how well that shape is known" in t for tag, t in rig_findings(free))
+    # With the shape estimated, every stated ± holds: distance, angle, and each direction of the position.
+    # The forward direction is the loose one; the distance between the cameras is known much better.
+    true_place = -R_TRUE.T @ T_TRUE
+    assert np.all(np.abs(free.position - true_place) < 3 * free.position_std)
+    assert abs(free.apart_mm - np.linalg.norm(T_TRUE)) < 3 * free.apart_std_mm
+    assert abs(free.turned_deg - 4.0) < 3 * free.turned_std_deg
+    assert free.position_std[2] > 3 * free.position_std[0]
+    # Taken as flat, the same ± is far too small: the board is wrong, and no ± can know that.
+    assert abs(flat.apart_mm - np.linalg.norm(T_TRUE)) > 4 * flat.apart_std_mm
+    assert any(tag == NOTE and "How well that shape is known is not part of the ± values" in t for tag, t in rig_findings(free))
     assert not any("shape of the board" in t for _tag, t in rig_findings(flat))
 
 
@@ -238,7 +247,9 @@ def test_two_cameras_in_the_window(tmp_path, charuco, camera):
     assert rig is not None and len(rig.pairs) == 8
     assert rig.apart_mm == pytest.approx(np.linalg.norm(T_TRUE), abs=0.5)
     assert bench.result is rig.second                                         # camera 2 is the one selected
-    assert bench.rig_values["Apart"].text() == f"{rig.apart_mm:.2f} mm"
+    assert bench.rig_values["Apart"].text() == f"{rig.apart_mm:.2f} ± {rig.apart_std_mm:.2f} mm"
+    assert bench.rig_values["Z (forward), mm"].text().startswith(f"{rig.position[2]:.2f} ± ")
+    assert not any(v.text().endswith("± 0.00") for v in bench.rig_values.values())
     assert bench.rms_big.text() == f"{rig.rms_point:.3f} px"
     assert bench.steps[1]._status.text() == "2 cameras · 8 pairs"
     assert bench.table.item(0, 3).text() == f"{rig.pairs[0].rms_point:.3f}"

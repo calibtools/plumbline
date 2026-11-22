@@ -123,7 +123,9 @@ def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports)
     h_a = _kv_table(p, M, y, half, [
         ("Apart, mm", f"{rig.apart_mm:.2f} ± {rig.apart_std_mm:.2f}" if known else f"{rig.apart_mm:.2f}"),
         ("Turned, degrees", f"{rig.turned_deg:.3f} ± {rig.turned_std_deg:.3f}" if known else f"{rig.turned_deg:.3f}"),
-        ("X (right), mm", f"{x:.2f}"), ("Y (down), mm", f"{yy:.2f}"), ("Z (forward), mm", f"{z:.2f}")], cols=1)
+        *[(name, f"{v:.2f} ± {sd:.{2 if round(sd, 2) > 0 else 3}f}" if known and sd == sd else f"{v:.2f}")
+          for name, v, sd in zip(("X (right), mm", "Y (down), mm", "Z (forward), mm"), (x, yy, z), rig.position_std)]],
+        cols=1)
     R, Tv = rig.rotation, rig.translation
     h_b = _kv_table(p, M + half + 16, y, half,
                     [(f"R, row {i + 1}", "  ".join(f"{v: .6f}" for v in R[i])) for i in range(3)]

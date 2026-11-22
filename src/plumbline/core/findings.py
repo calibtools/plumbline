@@ -178,7 +178,7 @@ def rig_findings(rig) -> list[tuple[str, str]]:
             out.append((NOTE, text))
     if rig.first.options.release_board and rig.second.options.release_board:
         out.append((NOTE, "The shape of the board was estimated by each camera on its own and the mean of the two "
-                          "was used for both. The ± on distance and angle does not cover how well that shape is known."))
+                          "was used for both. How well that shape is known is not part of the ± values."))
     if rig.unpaired:
         k = len(rig.unpaired)
         out.append((NOTE, f"{k} pair{' takes' if k == 1 else 's take'} no part in the position of camera 2: one of "
