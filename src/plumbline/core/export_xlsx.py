@@ -137,17 +137,24 @@ def write_xlsx(
 
         flagged = set(trusted_suspects(r))
         wp = wb.create_sheet("Board points")
+        released = r.board if r.board is not None and r.options.release_board else None
         _header(wp, ["Point ID", "x on board, mm", "y on board, mm", "Images", "RMS, px", "Mean dx, px",
-                     "Mean dy, px", "Offset x, mm", "Offset y, mm", "Note"],
-                [10, 15, 15, 9, 10, 12, 12, 13, 13, 30])
+                     "Mean dy, px", "Offset x, mm", "Offset y, mm", "Note"]
+                + (["Estimated dx, mm", "Estimated dy, mm", "Estimated dz, mm"] if released else []),
+                [10, 15, 15, 9, 10, 12, 12, 13, 13, 30] + ([16, 16, 16] if released else []))
         for i, pid in enumerate(st.ids.tolist()):
             wp.append([int(pid), float(obj[pid][0]), float(obj[pid][1]), int(st.count[i]), float(st.rms_px[i]),
                        float(st.mean_px[i][0]), float(st.mean_px[i][1]),
                        float(st.offset_mm[i][0]), float(st.offset_mm[i][1]),
-                       "off the same way in every image" if i in flagged else ""])
+                       "off the same way in every image" if i in flagged else ""]
+                      + ([float(v) for v in released.deviation[pid]] if released else []))
         for row in wp.iter_rows(min_row=2, min_col=5, max_col=9):
             for cell in row:
                 cell.number_format = PX
+        if released:
+            for row in wp.iter_rows(min_row=2, min_col=11, max_col=13):
+                for cell in row:
+                    cell.number_format = PX
         wp.auto_filter.ref = f"A1:J{wp.max_row}"
 
     wb.properties.title = f"{project_name} calibration, revision {revision}"

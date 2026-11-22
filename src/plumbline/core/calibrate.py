@@ -11,6 +11,8 @@ from .detect import Detection
 from .targets import Target
 
 MIN_VIEWS = 4
+BOARD_ROUNDS = 300       # limit when the shape of the board is estimated in full
+BOARD_LOOK_ROUNDS = 6    # a short look, to tell whether the board is worth estimating
 COVERAGE_GRID = (16, 12)  # columns, rows
 
 
@@ -24,6 +26,7 @@ class ModelOptions:
     thin_prism: bool = False  # s1..s4
     fix_aspect_ratio: bool = False
     fisheye: bool = False  # OpenCV fisheye model, k1..k4; the terms above do not apply
+    release_board: bool = False  # estimate the shape of the board together with the camera
 
     def flags(self) -> int:
         flags = 0
@@ -47,6 +50,8 @@ class ModelOptions:
             "thin_prism": self.thin_prism,
             "fix_aspect_ratio": self.fix_aspect_ratio,
             "fisheye": self.fisheye,
+            # Written only when on, so that results made before this option existed keep their fingerprint.
+            **({"release_board": True} if self.release_board else {}),
         }
 
     @staticmethod
@@ -84,6 +89,7 @@ class CalibrationResult:
     uncertainty: "object | None" = None  # core.uncertainty.Uncertainty; None when it cannot be worked out
     pattern: "object | None" = None       # core.residuals.ResidualPattern: what is left over, across the image
     points: "object | None" = None        # core.points.PointStats: every board point across its images
+    board: "object | None" = None         # core.board.BoardShape: the board as the images see it
     circle_shift_px: float | None = None  # mean perspective correction applied to circle centres, if any
     projection: "object | None" = None   # core.uncertainty.ProjectionUncertainty across the image, or None
 
@@ -98,6 +104,12 @@ class CalibrationResult:
     @property
     def fisheye(self) -> bool:
         return self.options.fisheye
+
+    def board_points(self) -> np.ndarray:
+        """The board points this result was solved with: as estimated if the board was released, else as entered."""
+        if self.options.release_board and self.board is not None:
+            return np.asarray(self.board.points, np.float64)
+        return self.target.object_points().astype(np.float64)
 
     @property
     def distortion_names(self) -> list[str]:
@@ -205,6 +217,31 @@ def calibrate(
             rms, K, dist, rvecs, tvecs = _solve(obj_pts, img_pts, size, options)
         circle_shift = float(np.mean(np.linalg.norm(np.concatenate(shifts), axis=1)))
 
+    # The board itself: estimated in full when asked for; otherwise a short look, enough to tell
+    # whether the images would fit a shaped board clearly better than the board as entered.
+    from .board import estimate_board
+
+    ids_per_view = [np.asarray(detections[i].ids).reshape(-1) for i in used]
+    seen_per_view = [p.reshape(-1, 2).astype(np.float64) for p in img_pts]
+
+    def solve_from(points_per_view, K0, dist0):
+        return _solve([p.reshape(-1, 1, 3).astype(np.float32) for p in points_per_view], img_pts, size, options,
+                      guess=(K0, dist0))
+
+    board = None
+    try:
+        board, released = estimate_board(
+            object_all, ids_per_view, seen_per_view, solve_from, (rms, K, dist, rvecs, tvecs), options.fisheye,
+            max_rounds=BOARD_ROUNDS if options.release_board else BOARD_LOOK_ROUNDS)
+    except (CalibrationError, np.linalg.LinAlgError):
+        board, released = None, None  # the camera result with the board as entered still stands
+    if options.release_board:
+        if board is None:
+            raise CalibrationError("The shape of the board could not be estimated from these images. "
+                                   "Switch that option off on the Model tab and calibrate again.")
+        rms, K, dist, rvecs, tvecs = released
+        obj_pts = [board.points[ids].reshape(-1, 1, 3).astype(np.float32) for ids in ids_per_view]
+
     views: list[ViewResult] = []
     total_sq, total_n = 0.0, 0
     for i, obj, img, rvec, tvec in zip(used, obj_pts, img_pts, rvecs, tvecs):
@@ -245,6 +282,7 @@ def calibrate(
         except (cv2.error, np.linalg.LinAlgError, ValueError):
             projection = None  # the parameters still stand; only the map is left out
     result = CalibrationResult(
+        board=board,
         circle_shift_px=circle_shift,
         uncertainty=uncertainty,
         projection=projection,
@@ -268,20 +306,29 @@ def calibrate(
     return result
 
 
-def _solve(obj_pts, img_pts, size, options: ModelOptions):
-    """One run of OpenCV's solver. Returns rms, K, distortion (trimmed), rvecs, tvecs."""
+def _solve(obj_pts, img_pts, size, options: ModelOptions, guess=None):
+    """One run of OpenCV's solver. Returns rms, K, distortion (trimmed), rvecs, tvecs.
+
+    guess: (K, distortion) to start from. Needed when the board points are not in
+    one plane, because OpenCV can only find a starting camera by itself from a flat board.
+    """
+    start = cv2.CALIB_USE_INTRINSIC_GUESS if guess is not None else 0
     try:
         if options.fisheye:
+            K0 = np.zeros((3, 3)) if guess is None else np.array(guess[0], np.float64)
+            D0 = np.zeros((4, 1)) if guess is None else np.array(guess[1], np.float64).reshape(4, 1)
             rms, K, dist, rvecs, tvecs = cv2.fisheye.calibrate(
                 [o.reshape(1, -1, 3).astype(np.float64) for o in obj_pts],
                 [p.reshape(1, -1, 2).astype(np.float64) for p in img_pts],
-                size, np.zeros((3, 3)), np.zeros((4, 1)),
-                flags=cv2.CALIB_RECOMPUTE_EXTRINSIC | cv2.CALIB_FIX_SKEW,
+                size, K0, D0,
+                flags=cv2.CALIB_RECOMPUTE_EXTRINSIC | cv2.CALIB_FIX_SKEW | start,
                 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 200, 1e-9),
             )
         else:
+            K0 = None if guess is None else np.array(guess[0], np.float64)
+            D0 = None if guess is None else np.array(guess[1], np.float64).reshape(-1)
             rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
-                obj_pts, img_pts, size, None, None, flags=options.flags()
+                obj_pts, img_pts, size, K0, D0, flags=options.flags() | start
             )
     except cv2.error as exc:  # pragma: no cover - depends on OpenCV internals
         hint = (" The fisheye model needs views that reach well into the corners of the image."

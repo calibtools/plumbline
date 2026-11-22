@@ -59,7 +59,10 @@ class Detection:
 
 def read_gray(path: str) -> np.ndarray | None:
     """Read an image as 8-bit grey. Returns None if it cannot be read."""
-    data = np.fromfile(path, dtype=np.uint8)  # handles non-ASCII paths on Windows
+    try:
+        data = np.fromfile(path, dtype=np.uint8)  # handles non-ASCII paths on Windows
+    except OSError:  # moved, renamed or on a drive that is not connected
+        return None
     if data.size == 0:
         return None
     return cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
