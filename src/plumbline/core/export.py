@@ -182,6 +182,12 @@ def write_opencv_xml(result: CalibrationResult, path: str | Path) -> None:
 # ------------------------------------------------------------- two cameras
 def rig_summary(rig, files: tuple[str, str] | None = None) -> dict:
     """How camera 2 sits relative to camera 1, with both cameras' own parameters alongside."""
+    from .rectify import rectify   # here, not at the top: rectify builds on rig, which builds on this package
+
+    try:
+        rectification = rectify(rig, tables=False)
+    except cv2.error:
+        rectification = None
     out = {
         "generator": f"Plumbline {__version__} by Calib.Tools, https://calib.tools",
         "convention": "x2 = rotation @ x1 + translation_mm: a point in camera 1 coordinates, in camera 2 coordinates. "
@@ -192,6 +198,7 @@ def rig_summary(rig, files: tuple[str, str] | None = None) -> dict:
                 "note": "One standard deviation, from the scatter of the detected points and from how well "
                         "each camera's own parameters are known."},
         "pairs": [{"pair": p.index + 1, "rms_point": p.rms_point, "points": p.points} for p in rig.pairs],
+        "rectification": rectification.to_dict() if rectification is not None else None,
         "camera_1": result_summary(rig.first),
         "camera_2": result_summary(rig.second),
     }
@@ -218,6 +225,16 @@ def write_rig_yaml(rig, path: str | Path) -> None:
             fs.write(f"D{n}", np.asarray(cam.distortion, np.float64).reshape(1, -1))
         fs.write("R", np.asarray(rig.rotation, np.float64))
         fs.write("T", np.asarray(rig.translation, np.float64).reshape(3, 1))
+        from .rectify import rectify
+
+        try:
+            r = rectify(rig, tables=False)
+            fs.writeComment("Row alignment (stereoRectify): R1, R2, P1, P2, Q. The lenses are not in these; use "
+                            "the lookup tables, or each camera's own model with R1 / P1 and R2 / P2.")
+            for key in ("R1", "R2", "P1", "P2", "Q"):
+                fs.write(key, np.asarray(getattr(r, key), np.float64))
+        except cv2.error:
+            pass
         fs.write("rms_point", float(rig.rms_point))
         fs.write("pairs_used", int(len(rig.pairs)))
     finally:

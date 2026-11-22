@@ -269,24 +269,30 @@ def test_two_cameras_in_the_window(tmp_path, charuco, camera):
     assert "cam1 and again for cam2" in dialog.revision_note.text()
     out = tmp_path / "out"
     out.mkdir()
-    bench.export_to(str(out), formats={"opencv_yaml", "json", "ros", "report", "xlsx"})
+    bench.export_to(str(out), formats={"opencv_yaml", "json", "ros", "report", "xlsx", "maps"})
     expected = {f"{name}-cam{c}-{tail}" for c in (1, 2)
-                for tail in ("camera.yml", "camera.json", "camera_info.yaml", "report.pdf", "data.xlsx")}
-    expected |= {f"{name}-cameras.json", f"{name}-cameras.yml", f"{name}-cameras-report.pdf", f"{name}.plumbline"}
+                for tail in ("camera.yml", "camera.json", "camera_info.yaml", "report.pdf", "data.xlsx",
+                             "undistort-maps.npz")}
+    expected |= {f"{name}-cameras.json", f"{name}-cameras.yml", f"{name}-cameras-report.pdf",
+                 f"{name}-cameras-rectify-maps.npz", f"{name}.plumbline"}
     assert {p.name for p in out.iterdir()} == expected
-    assert bench.status.text().endswith("14 files, for camera 1, camera 2 and both.")
+    assert bench.status.text().endswith("17 files, for camera 1, camera 2 and both.")
     assert (out / f"{name}-cameras-report.pdf").read_bytes().startswith(b"%PDF")
     fs = cv2.FileStorage(str(out / f"{name}-cameras.yml"), cv2.FILE_STORAGE_READ)
     assert np.allclose(fs.getNode("R").mat(), rig.rotation) and np.allclose(fs.getNode("T").mat().ravel(), rig.translation)
     assert np.allclose(fs.getNode("K2").mat(), rig.second.camera_matrix)
     assert np.allclose(fs.getNode("D1").mat().ravel(), rig.first.distortion)
-    assert fs.getNode("distortion_model_1").string() == "plumb_bob" or fs.getNode("distortion_model_1").string()
+    assert fs.getNode("distortion_model_1").string()
+    tables = np.load(out / f"{name}-cameras-rectify-maps.npz")
+    assert np.allclose(fs.getNode("P2").mat(), tables["P2"]) and np.allclose(fs.getNode("Q").mat(), tables["Q"])
+    assert tables["map1_x"].shape == (rig.first.image_height, rig.first.image_width)
     fs.release()
     both = json.loads((out / f"{name}-cameras.json").read_text())
     assert both["apart_mm"] == pytest.approx(rig.apart_mm) and len(both["pairs"]) == 8
     assert both["camera_files"] == {"camera_1": f"{name}-cam1-camera.json", "camera_2": f"{name}-cam2-camera.json"}
     assert both["camera_2"]["camera_matrix"] == json.loads((out / f"{name}-cam2-camera.json").read_text())["camera_matrix"]
     assert "x2 = rotation @ x1" in both["convention"]
+    assert both["rectification"]["aligned_along"] == "rows" and np.allclose(both["rectification"]["Q"], tables["Q"])
     # The values do what the file says: the two cameras' views of the board agree through R and T.
     R, T = np.array(both["rotation"]), np.array(both["translation_mm"])
     v1 = next(v for v in rig.first.views if v.index == 0)
