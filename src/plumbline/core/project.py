@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .calibrate import ModelOptions
@@ -36,6 +36,23 @@ SUFFIX = ".plumbline"
 
 
 @dataclass
+class ExtraCamera:
+    """Camera 3, 4, ...: its images, one per set and in set order, and its own lens settings if it has them."""
+    image_paths: list[str] = field(default_factory=list)
+    detections: list[Detection] = field(default_factory=list)
+    options: ModelOptions | None = None
+
+    def to_dict(self) -> dict:
+        return {"image_paths": list(self.image_paths), "detections": [d.to_dict() for d in self.detections],
+                **({"options": self.options.to_dict()} if self.options else {})}
+
+    @staticmethod
+    def from_dict(data: dict) -> "ExtraCamera":
+        return ExtraCamera(list(data.get("image_paths", [])), [Detection.from_dict(d) for d in data.get("detections", [])],
+                           ModelOptions.from_dict(data["options"]) if data.get("options") else None)
+
+
+@dataclass
 class Project:
     target: Target | None = None
     options: ModelOptions = field(default_factory=ModelOptions)
@@ -55,18 +72,59 @@ class Project:
     second_detections: list[Detection] = field(default_factory=list)
     second_options: ModelOptions | None = None  # camera 2's own lens settings; None = the same as camera 1
 
+    more_cameras: list[ExtraCamera] = field(default_factory=list)  # cameras 3, 4, ...; only with a second camera
+
+    @property
+    def camera_count(self) -> int:
+        return 1 + (1 + len(self.more_cameras) if self.second_camera else 0)
+
     def options_of(self, camera: int) -> ModelOptions:
-        return self.second_options if camera and self.second_options is not None else self.options
+        own = None if camera == 0 else self.second_options if camera == 1 else self.more_cameras[camera - 2].options
+        return own if own is not None else self.options
+
+    def set_options(self, camera: int, options: ModelOptions | None) -> None:
+        """A camera's own lens settings; None for a camera after the first means the same as camera 1."""
+        if camera == 0:
+            self.options = options
+        elif camera == 1:
+            self.second_options = options
+        else:
+            self.more_cameras[camera - 2].options = options
 
     def paths_of(self, camera: int) -> list[str]:
-        return self.second_image_paths if camera else self.image_paths
+        return self.image_paths if camera == 0 else self.second_image_paths if camera == 1 \
+            else self.more_cameras[camera - 2].image_paths
 
     def detections_of(self, camera: int) -> list[Detection]:
-        return self.second_detections if camera else self.detections
+        return self.detections if camera == 0 else self.second_detections if camera == 1 \
+            else self.more_cameras[camera - 2].detections
+
+    def set_detections(self, camera: int, detections: list[Detection]) -> None:
+        if camera == 0:
+            self.detections = detections
+        elif camera == 1:
+            self.second_detections = detections
+        else:
+            self.more_cameras[camera - 2].detections = detections
+
+    def add_camera(self) -> int:
+        """Add a camera after the last one; returns its position, counted from 0."""
+        if not self.second_camera:
+            self.second_camera = True
+        else:
+            self.more_cameras.append(ExtraCamera(options=replace(self.options) if self.second_options is not None else None))
+        return self.camera_count - 1
+
+    def remove_last_camera(self) -> None:
+        if self.more_cameras:
+            self.more_cameras.pop()
+        elif self.second_camera:
+            self.second_camera, self.second_image_paths, self.second_detections, self.second_options = False, [], [], None
 
     @property
     def pair_count(self) -> int:
-        return max(len(self.image_paths), len(self.second_image_paths)) if self.second_camera else len(self.image_paths)
+        """Rows of the table: images of one camera, or sets of images taken together by several."""
+        return max(len(self.paths_of(c)) for c in range(self.camera_count))
 
     def due_date(self) -> str | None:
         """ISO date from which this camera should be calibrated again, or None."""
@@ -102,6 +160,7 @@ class Project:
                                   "detections": [d.to_dict() for d in self.second_detections],
                                   **({"options": self.second_options.to_dict()} if self.second_options else {})}}
                if self.second_camera else {}),
+            **({"more_cameras": [c.to_dict() for c in self.more_cameras]} if self.second_camera and self.more_cameras else {}),
         }
 
     def save(self, path: str | None = None) -> None:
@@ -134,4 +193,5 @@ class Project:
             second_detections=[Detection.from_dict(d) for d in (data.get("second_camera") or {}).get("detections", [])],
             second_options=(ModelOptions.from_dict(data["second_camera"]["options"])
                             if (data.get("second_camera") or {}).get("options") else None),
+            more_cameras=[ExtraCamera.from_dict(c) for c in data.get("more_cameras", [])] if "second_camera" in data else [],
         )

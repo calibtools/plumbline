@@ -1,12 +1,16 @@
 """Three or more cameras looking at the same board."""
+import json
+
 import cv2
 import numpy as np
 import pytest
 
-from plumbline.core import lens, synth
+from plumbline.core import export, lens, synth
 from plumbline.core.calibrate import CalibrationError, ModelOptions
 from plumbline.core.detect import Detection
+from plumbline.core.findings import group_findings
 from plumbline.core.group import calibrate_group
+from plumbline.core.naming import group_signature
 from plumbline.core.rig import calibrate_pair
 
 
@@ -48,7 +52,7 @@ def off(placed):
             float(np.rad2deg(np.linalg.norm(cv2.Rodrigues(placed.rotation @ R.T)[0]))))
 
 
-def test_three_cameras(charuco, camera):
+def test_three_cameras(tmp_path, charuco, camera):
     dets = views(charuco, [camera] * 3, [False] * 3)
     full = charuco.corner_count
     assert any(len(d.ids) < full for d in dets[2])            # part of the board is out of view in some images
@@ -62,6 +66,20 @@ def test_three_cameras(charuco, camera):
     d = g.to_dict()
     assert [c["camera"] for c in d["cameras"]] == [2, 3] and d["cameras"][1]["reached_through_camera"] == 1
 
+    # The files and what is said about the result.
+    export.write_group_json(g, tmp_path / "cameras.json", ["a.json", "b.json", "c.json"])
+    export.write_group_yaml(g, tmp_path / "cameras.yml")
+    data = json.loads((tmp_path / "cameras.json").read_text())
+    assert data["camera_count"] == 3 and data["camera_files"]["camera_3"] == "c.json" and len(data["sets"]) == 16
+    assert data["cameras"][1]["translation_mm"] == pytest.approx(list(g.placed[1].translation))
+    fs = cv2.FileStorage(str(tmp_path / "cameras.yml"), cv2.FILE_STORAGE_READ)
+    assert fs.getNode("T3").mat().ravel() == pytest.approx(g.placed[1].translation)
+    assert fs.getNode("K2").mat() == pytest.approx(g.cameras[1].camera_matrix) and fs.getNode("R1").empty()
+    fs.release()
+    said = group_findings(g)
+    assert said[0][0] == "PASS" and sum("mm from camera 1" in text for _k, text in said) == 2
+    assert len(group_signature(g)) == 16
+
 
 def test_a_camera_that_never_shares_a_view_with_camera_1(charuco, camera):
     hide = {(2, i) for i in range(8)} | {(0, i) for i in range(8, 16)}     # sets 1-8: cameras 1+2, sets 9-16: cameras 2+3
@@ -69,6 +87,7 @@ def test_a_camera_that_never_shares_a_view_with_camera_1(charuco, camera):
     assert g.placed[1].through == 1 and g.placed[0].through == 0
     assert all(s.cameras in ((0, 1), (1, 2)) for s in g.sets)
     assert all(within(p, *off(p)) for p in g.placed)
+    assert any("first placed through camera 2" in text for _k, text in group_findings(g))
 
 
 def test_two_cameras_give_what_the_pair_solve_gives(charuco, camera):
