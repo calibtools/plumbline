@@ -28,6 +28,7 @@ from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, rig_findings
 from ..core.pairing import natural, split_by_camera
 from ..core.project import SUFFIX, Project
+from ..core.rectify import write_rectify_maps
 from ..core.rig import RigResult, calibrate_pair
 from ..core.targets import (
     APRILGRID, ARUCO_GRID, ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, MARKER_GRIDS, Target,
@@ -1084,6 +1085,9 @@ class Workbench(QWidget):
                                   own if formats & {"json", "opencv_yaml"} else None)
             export.write_rig_yaml(rig, base / both["rig_yaml"])
             written += [both["rig_json"], both["rig_yaml"]]
+            if "maps" in formats:
+                write_rectify_maps(rig, base / both["rig_maps"])
+                written.append(both["rig_maps"])
             if "report" in formats:
                 write_rig_report(rig, self.project.detections, self.project.second_detections,
                                  base / both["rig_report"], name, revision,
