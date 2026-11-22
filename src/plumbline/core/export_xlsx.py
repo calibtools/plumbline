@@ -133,7 +133,9 @@ def write_xlsx(
     if r.points is not None:
         st = r.points
         obj = r.target.object_points()
-        flagged = set(st.suspects())
+        from .points import trusted_suspects
+
+        flagged = set(trusted_suspects(r))
         wp = wb.create_sheet("Board points")
         _header(wp, ["Point ID", "x on board, mm", "y on board, mm", "Images", "RMS, px", "Mean dx, px",
                      "Mean dy, px", "Offset x, mm", "Offset y, mm", "Note"],

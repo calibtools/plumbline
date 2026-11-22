@@ -82,6 +82,7 @@ class CalibrationResult:
     skipped: list[int] = field(default_factory=list)
     opencv_version: str = cv2.__version__
     uncertainty: "object | None" = None  # core.uncertainty.Uncertainty; None when it cannot be worked out
+    pattern: "object | None" = None       # core.residuals.ResidualPattern: what is left over, across the image
     points: "object | None" = None        # core.points.PointStats: every board point across its images
     circle_shift_px: float | None = None  # mean perspective correction applied to circle centres, if any
     projection: "object | None" = None   # core.uncertainty.ProjectionUncertainty across the image, or None
@@ -260,7 +261,10 @@ def calibrate(
     )
     from .points import point_statistics
 
+    from .residuals import residual_pattern
+
     result.points = point_statistics(result, detections)
+    result.pattern = residual_pattern(result, detections)
     return result
 
 

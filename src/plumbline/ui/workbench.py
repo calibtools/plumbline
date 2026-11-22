@@ -22,6 +22,7 @@ from ..core.calibrate import (
 from ..core.detect import Detection, detect_file, read_gray
 from ..core.naming import export_files, result_signature, safe_name
 from ..core.export_code import write_example, write_maps
+from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
@@ -45,6 +46,7 @@ class StepButton(QPushButton):
     def __init__(self, title: str):
         super().__init__()
         self._title = title
+        self._full = ""
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(40)
         self.setMinimumWidth(150)
@@ -70,12 +72,19 @@ class StepButton(QPushButton):
         )
         self._name.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 13px; font-weight: 600; color: {ink};')
         self._status.setStyleSheet(f"font-size: 11px; color: {sub};")
-        # A long part number is cut with an ellipsis, never mid-letter; the full text is in the tooltip.
+        self._full = status
+        self._fit()
+
+    def _fit(self) -> None:
+        """A text that does not fit is cut with an ellipsis, never mid-letter; the tooltip has all of it."""
         room = max(40, self.width() - 22)
-        shown = self._status.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, room)
-        self.setToolTip(status if shown != status else "")
-        status = shown
-        self._status.setText(status)
+        shown = self._status.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, room)
+        self.setToolTip(self._full if shown != self._full else "")
+        self._status.setText(shown)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
 
 
 class Workbench(QWidget):
@@ -131,9 +140,10 @@ class Workbench(QWidget):
         self.steps = [StepButton(t) for t in ("1 Target", "2 Images", "3 Detect", "4 Calibrate", "5 Export")]
         # The first step shows the part number and needs room for one such as CT-APR-P-800X600-T36;
         # the others give up a little so that the header still fits a 1360 px window.
-        self.steps[0].setFixedWidth(168)
+        self.steps[0].setFixedWidth(164)
         for s in self.steps[1:]:
-            s.setFixedWidth(144)
+            s.setMinimumWidth(126)   # they narrow when a long project name needs the room
+            s.setMaximumWidth(140)
         actions = (self._goto_target, self.add_images, self.run_detection, self.run_calibration, self.export_all)
         for s, act in zip(self.steps, actions):
             s.clicked.connect(act)
@@ -242,10 +252,11 @@ class Workbench(QWidget):
         right = QVBoxLayout()
         right.setSpacing(6)
         heads = QHBoxLayout()
-        heads.setSpacing(14)
+        heads.setSpacing(12)
         self.map_tabs = []
         for text, tip in (("COVERAGE", "Where in the image the detected points fell"),
-                          ("UNCERTAINTY", "How well the result is pinned down across the image")):
+                          ("UNCERTAINTY", "How well the result is pinned down across the image"),
+                          ("RESIDUALS", "What is left over after the fit, across the image")):
             b_ = QPushButton(text)
             b_.setCursor(Qt.CursorShape.PointingHandCursor)
             b_.setToolTip(tip)
@@ -272,7 +283,7 @@ class Workbench(QWidget):
                 f'border: 0; border-bottom: 2px solid {T.INK if i == which else "transparent"}; '
                 f'background: transparent; padding: 0 0 2px 0; min-height: 0; color: {ink}; '
                 f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
-        self.coverage.set_mode(which == 1)
+        self.coverage.set_mode(which == 1, residuals=which == 2)
 
     def _right(self) -> QWidget:
         w = QWidget()
@@ -903,7 +914,7 @@ class Workbench(QWidget):
         self.view.set_image(gray, corners, residuals, caption)
         # Ring the board points that are off the same way in every image, where this image shows them.
         if r is not None and r.points is not None and det is not None and len(corners):
-            wanted = {int(r.points.ids[i]) for i in r.points.suspects()}
+            wanted = {int(r.points.ids[i]) for i in trusted_suspects(r)}
             if wanted:
                 self.view.set_rings(np.asarray(corners)[[k for k, pid in enumerate(det.ids.tolist())
                                                          if pid in wanted]])
@@ -940,7 +951,12 @@ class Workbench(QWidget):
         dets = p.detections
         n = len(p.image_paths)
         shown = p.name if len(p.name) <= 20 else p.name[:19] + "\u2026"
-        self.name_btn.setText(shown + (f" \u00b7 r{p.revision}" if p.revision else ""))
+        full = shown + (f" \u00b7 r{p.revision}" if p.revision else "")
+        # The header has room for about 20 characters here; a longer name is cut, never the layout.
+        cut = full if len(full) <= 20 else full[:19] + "\u2026"
+        self.name_btn.setText(cut)
+        self.name_btn.setToolTip((full + "\n" if cut != full else "")
+                                 + "Rename this project. Exported files carry this name.")
         keep = self._current
         self.table.blockSignals(True)
         self.table.setRowCount(n)
@@ -984,6 +1000,7 @@ class Workbench(QWidget):
         self._refresh_chart()
         res = self.result
         self.coverage.set_uncertainty(res.projection.sd if res is not None and res.projection is not None else None)
+        self.coverage.set_residuals(res.pattern.mean if res is not None and res.pattern is not None else None)
 
         # Header steps.
         t = p.target
@@ -994,7 +1011,7 @@ class Workbench(QWidget):
             ("done" if dets else "next" if n and t else "off",
              f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
             ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
-            ("next" if r else "off", "Parameters and report"),
+            ("next" if r else "off", "Files and report"),
         ]
         for step, (kind, status) in zip(self.steps, states):
             step.set_state(kind, status)

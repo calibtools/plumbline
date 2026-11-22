@@ -38,9 +38,21 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
     else:
         out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
     u = r.uncertainty
+    pattern = r.pattern
+    if pattern is not None and pattern.has_pattern:
+        if r.options.fisheye:
+            advice = "The fisheye model does not follow this lens; try the standard model with more terms."
+        elif r.options.k3 and r.options.rational:
+            advice = "If the lens is very wide, try the fisheye model."
+        else:
+            advice = "Add lens terms (k3, then the rational terms), or the fisheye model for a very wide lens."
+        out.append((CHECK, f"What is left over after the fit is not just noise: in parts of the image it leans "
+                           f"one way by up to {pattern.largest_px:.2f} px. {advice} See the Residuals map."))
     stats = r.points
     if stats is not None:
-        bad = stats.suspects()
+        from .points import trusted_suspects
+
+        bad = trusted_suspects(r)
         if bad:
             obj = r.target.object_points()
             first = bad[0]

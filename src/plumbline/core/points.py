@@ -82,3 +82,17 @@ def point_statistics(result: "CalibrationResult", detections: list[Detection]) -
             except np.linalg.LinAlgError:
                 score[i] = 0.0
     return PointStats(ids, count, rms, mean_px, offset, score)
+
+
+def trusted_suspects(result: "CalibrationResult") -> list[int]:
+    """Misplaced board points, unless the lens model itself does not fit.
+
+    A lens model that cannot follow the lens also leaves some points off the same
+    way in every image. Then the model is the thing to fix first, and no board
+    point is blamed.
+    """
+    if result.points is None:
+        return []
+    if result.pattern is not None and result.pattern.has_pattern:
+        return []
+    return result.points.suspects()

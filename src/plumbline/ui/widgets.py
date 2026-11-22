@@ -221,7 +221,9 @@ class CoverageMap(QWidget):
         self._grid: np.ndarray | None = None
         self._share = 0.0
         self._spread: np.ndarray | None = None
+        self._lean: np.ndarray | None = None
         self.show_uncertainty = False
+        self.show_residuals = False
 
     def set_grid(self, grid: np.ndarray | None, share: float = 0.0):
         self._grid, self._share = grid, share
@@ -232,7 +234,61 @@ class CoverageMap(QWidget):
         self._spread = sd
         self.update()
 
-    def set_mode(self, uncertainty: bool):
+    def set_residuals(self, mean: np.ndarray | None):
+        """Average of observed minus predicted per cell, (rows, cols, 2) in px, or None."""
+        self._lean = mean
+        self.update()
+
+    def _paint_residuals(self, p: QPainter, area: QRectF):
+        lean = self._lean
+        p.setPen(QPen(QColor(T.HAIRLINE), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
+        if lean is None:
+            p.setPen(QColor(T.INK_SOFT))
+            p.drawText(area, Qt.AlignmentFlag.AlignCenter, "No result yet")
+            return
+        rows, cols = lean.shape[:2]
+        cw, ch = area.width() / cols, area.height() / rows
+        size = np.linalg.norm(lean, axis=2)
+        top = float(np.nanmax(size)) if np.isfinite(size).any() else 0.0
+        # Lines are drawn so that a typical large one spans a cell; a few much larger ones are capped,
+        # otherwise they would shrink everything else to dots. With almost nothing left over, lines stay short.
+        finite = size[np.isfinite(size)]
+        scale = float(np.percentile(finite, 85)) if finite.size else 0.0
+        reach = 1.6 * min(cw, ch)
+        gain = min(cw, ch) / max(scale, 0.05)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        for r in range(rows):
+            for c in range(cols):
+                if not np.isfinite(size[r, c]):
+                    continue
+                mid = QPointF((c + 0.5) * cw, (r + 0.5) * ch)
+                dx, dy = lean[r, c] * gain
+                length = float(np.hypot(dx, dy))
+                if length > reach:
+                    dx, dy = dx * reach / length, dy * reach / length
+                strong = size[r, c] >= 0.1
+                p.setPen(QPen(QColor(T.RED if strong else T.INK), 1.4 if strong else 1.0))
+                p.setBrush(QColor(T.RED if strong else T.INK))
+                p.drawLine(QPointF(mid.x() - dx / 2, mid.y() - dy / 2), QPointF(mid.x() + dx / 2, mid.y() + dy / 2))
+                p.drawEllipse(QPointF(mid.x() + dx / 2, mid.y() + dy / 2), 1.5, 1.5)   # the dot marks the far end
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setPen(QColor(T.INK_MUTED))
+        p.drawText(QRectF(0, 154, 244, 16), Qt.AlignmentFlag.AlignLeft,
+                   f"average per cell, largest {top:.2f} px")
+
+    def set_mode(self, uncertainty: bool, residuals: bool = False):
+        self.show_residuals = residuals
+        if residuals:
+            self.show_uncertainty = False
+            self.setToolTip(
+                "What is left over after the fit, averaged over each part of the image: where the points were "
+                "found minus where the result puts them. The dot is the far end of each line.\n"
+                "With a lens model that fits, the lines are short and point every which way. "
+                "Red lines are 0.1 px and longer.")
+            self.update()
+            return
         self.show_uncertainty = uncertainty
         self.setToolTip(
             "How far a viewing direction may land from where the result puts it, one standard deviation.\n"
@@ -270,6 +326,9 @@ class CoverageMap(QWidget):
         p = QPainter(self)
         p.setFont(T.mono(11))
         area = QRectF(0, 0, 240, 150)
+        if self.show_residuals:
+            self._paint_residuals(p, area)
+            return
         if self.show_uncertainty:
             self._paint_uncertainty(p, area)
             return

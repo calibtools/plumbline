@@ -43,7 +43,7 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert r is not None and len(r.views) >= 18
     assert abs(r.fx - 1500) / 1500 < 0.005
     assert r.rms_point < 0.5
-    assert bench.steps[4]._status.text() == "Parameters and report"
+    assert bench.steps[4]._status.text() == "Files and report"
 
     first = r.views[2].index
     bench._toggle(first)
