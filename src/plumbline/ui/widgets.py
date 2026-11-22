@@ -113,6 +113,7 @@ class ErrorChart(QWidget):
 
     toggled = Signal(int)
     selected = Signal(int)
+    per = "image"   # what one bar stands for: an image, or a pair of images with two cameras
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -179,7 +180,7 @@ class ErrorChart(QWidget):
         p.drawLine(QPointF(plot.left(), plot.bottom()), QPointF(plot.right(), plot.bottom()))
         p.setPen(QColor(T.INK_MUTED))
         p.drawText(QRectF(plot.left(), h - 18, plot.width(), 16), Qt.AlignmentFlag.AlignLeft,
-                   "px per image, RMS per point · click a bar to exclude or restore it")
+                   f"px per {self.per} · click a bar to exclude or restore it")
 
     def _hit(self, pos) -> int | None:
         for r, idx in self._rects:
@@ -220,15 +221,118 @@ class CoverageMap(QWidget):
         self.setFixedSize(244, 170)
         self._grid: np.ndarray | None = None
         self._share = 0.0
+        self._spread: np.ndarray | None = None
+        self._lean: np.ndarray | None = None
+        self.show_uncertainty = False
+        self.show_residuals = False
 
     def set_grid(self, grid: np.ndarray | None, share: float = 0.0):
         self._grid, self._share = grid, share
         self.update()
 
+    def set_uncertainty(self, sd: np.ndarray | None):
+        """Projection uncertainty per cell in px (one standard deviation), or None."""
+        self._spread = sd
+        self.update()
+
+    def set_residuals(self, mean: np.ndarray | None):
+        """Average of observed minus predicted per cell, (rows, cols, 2) in px, or None."""
+        self._lean = mean
+        self.update()
+
+    def _paint_residuals(self, p: QPainter, area: QRectF):
+        lean = self._lean
+        p.setPen(QPen(QColor(T.HAIRLINE), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
+        if lean is None:
+            p.setPen(QColor(T.INK_SOFT))
+            p.drawText(area, Qt.AlignmentFlag.AlignCenter, "No result yet")
+            return
+        rows, cols = lean.shape[:2]
+        cw, ch = area.width() / cols, area.height() / rows
+        size = np.linalg.norm(lean, axis=2)
+        top = float(np.nanmax(size)) if np.isfinite(size).any() else 0.0
+        # Lines are drawn so that a typical large one spans a cell; a few much larger ones are capped,
+        # otherwise they would shrink everything else to dots. With almost nothing left over, lines stay short.
+        finite = size[np.isfinite(size)]
+        scale = float(np.percentile(finite, 85)) if finite.size else 0.0
+        reach = 1.6 * min(cw, ch)
+        gain = min(cw, ch) / max(scale, 0.05)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        for r in range(rows):
+            for c in range(cols):
+                if not np.isfinite(size[r, c]):
+                    continue
+                mid = QPointF((c + 0.5) * cw, (r + 0.5) * ch)
+                dx, dy = lean[r, c] * gain
+                length = float(np.hypot(dx, dy))
+                if length > reach:
+                    dx, dy = dx * reach / length, dy * reach / length
+                strong = size[r, c] >= 0.1
+                p.setPen(QPen(QColor(T.RED if strong else T.INK), 1.4 if strong else 1.0))
+                p.setBrush(QColor(T.RED if strong else T.INK))
+                p.drawLine(QPointF(mid.x() - dx / 2, mid.y() - dy / 2), QPointF(mid.x() + dx / 2, mid.y() + dy / 2))
+                p.drawEllipse(QPointF(mid.x() + dx / 2, mid.y() + dy / 2), 1.5, 1.5)   # the dot marks the far end
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setPen(QColor(T.INK_MUTED))
+        p.drawText(QRectF(0, 154, 244, 16), Qt.AlignmentFlag.AlignLeft,
+                   f"average per cell, largest {top:.2f} px")
+
+    def set_mode(self, uncertainty: bool, residuals: bool = False):
+        self.show_residuals = residuals
+        if residuals:
+            self.show_uncertainty = False
+            self.setToolTip(
+                "What is left over after the fit, averaged over each part of the image: where the points were "
+                "found minus where the result puts them. The dot is the far end of each line.\n"
+                "With a lens model that fits, the lines are short and point every which way. "
+                "Red lines are 0.1 px and longer.")
+            self.update()
+            return
+        self.show_uncertainty = uncertainty
+        self.setToolTip(
+            "How far a viewing direction may land from where the result puts it, one standard deviation.\n"
+            "Light: under 0.05 px. Mid: under 0.2 px. Dark: under 0.5 px. Red: 0.5 px and more.\n"
+            "From the scatter of the detected points; a slight turn of the whole camera is not counted."
+            if uncertainty else "")
+        self.update()
+
+    def _paint_uncertainty(self, p: QPainter, area: QRectF):
+        sd = self._spread
+        if sd is None:
+            p.setPen(QPen(QColor(T.HAIRLINE), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
+            p.setPen(QColor(T.INK_SOFT))
+            p.drawText(area, Qt.AlignmentFlag.AlignCenter, "No result yet")
+            return
+        rows, cols = sd.shape
+        cw, ch = area.width() / cols, area.height() / rows
+        for r in range(rows):
+            for c in range(cols):
+                v = float(sd[r, c])
+                if not np.isfinite(v):
+                    continue  # outside what the lens model reaches
+                shade = (T.HAIRLINE if v < 0.05 else T.LINE_STRONG if v < 0.2
+                         else T.INK if v < 0.5 else T.RED_TEXT)
+                p.setPen(QPen(QColor(shade), 1))
+                p.setBrush(QColor(shade))
+                p.drawRect(QRectF(c * cw + 1, r * ch + 1, cw - 2, ch - 2))
+        p.setPen(QColor(T.INK_MUTED))
+        p.drawText(QRectF(0, 154, 244, 16), Qt.AlignmentFlag.AlignLeft,
+                   f"typical ±{np.nanmedian(sd):.2f} px · worst ±{np.nanmax(sd):.2f} px")
+
     def paintEvent(self, _e):
         p = QPainter(self)
         p.setFont(T.mono(11))
         area = QRectF(0, 0, 240, 150)
+        if self.show_residuals:
+            self._paint_residuals(p, area)
+            return
+        if self.show_uncertainty:
+            self._paint_uncertainty(p, area)
+            return
         if self._grid is None:
             p.setPen(QPen(QColor(T.HAIRLINE), 1))
             p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
@@ -269,6 +373,7 @@ class ImageView(QWidget):
         self.setMinimumSize(320, 240)
         self._pix: QPixmap | None = None
         self._corners = np.zeros((0, 2))
+        self._rings = np.zeros((0, 2))
         self._residuals: np.ndarray | None = None
         self._message = ""
         self._caption = ""
@@ -307,12 +412,18 @@ class ImageView(QWidget):
 
     def set_image(self, gray: np.ndarray | None, corners: np.ndarray, residuals: np.ndarray | None, caption: str):
         if gray is None:
-            self.set_message("This image could not be read")
+            self.set_message("This image could not be read.\n\nIt may have been moved or renamed since it was added.")
             return
         h, w = gray.shape[:2]
         img = QImage(np.ascontiguousarray(gray).data, w, h, w, QImage.Format.Format_Grayscale8).copy()
         self._pix = QPixmap.fromImage(img)
         self._corners, self._residuals, self._caption = corners, residuals, caption
+        self._rings = np.zeros((0, 2))
+        self.update()
+
+    def set_rings(self, points: np.ndarray):
+        """Points to circle in the current image, in image pixels: board points that look misplaced."""
+        self._rings = np.asarray(points, np.float64).reshape(-1, 2)
         self.update()
 
     def paintEvent(self, _e):
@@ -344,6 +455,13 @@ class ImageView(QWidget):
                 dx, dy = self._residuals[k]
                 p.setPen(QPen(QColor(T.RED), 1.4))
                 p.drawLine(pt, QPointF(pt.x() + dx * RESIDUAL_GAIN * s, pt.y() + dy * RESIDUAL_GAIN * s))
+        for cx, cy in self._rings:
+            pt = QPointF(x0 + (cx + 0.5) * s, y0 + (cy + 0.5) * s)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor("#FFFFFF"), 4))
+            p.drawEllipse(pt, 13, 13)
+            p.setPen(QPen(QColor(T.RED), 2))
+            p.drawEllipse(pt, 13, 13)
         p.setPen(QColor(T.INK_MUTED))
         p.setFont(T.mono(12))
         room = self.corrected_btn.width() + 16 if self._allowed else 0

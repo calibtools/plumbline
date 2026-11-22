@@ -9,7 +9,7 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QSpinBox,
+    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -20,11 +20,14 @@ from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
 from ..core.detect import Detection, detect_file, read_gray
-from ..core.naming import export_files, result_signature, safe_name
+from ..core.naming import export_files, result_signature, rig_files, rig_signature, safe_name
 from ..core.export_code import write_example, write_maps
+from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
+from ..core.pairing import natural, split_by_camera
 from ..core.project import SUFFIX, Project
+from ..core.rig import RigResult, calibrate_pair
 from ..core.targets import (
     APRILGRID, ARUCO_GRID, ASYMMETRIC_CIRCLES, CHARUCO, CHECKERBOARD, CIRCLES, DICTIONARIES, MARKER_GRIDS, Target,
 )
@@ -37,6 +40,7 @@ from .widgets import (
 )
 
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp)"
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
 
 class StepButton(QPushButton):
@@ -45,6 +49,7 @@ class StepButton(QPushButton):
     def __init__(self, title: str):
         super().__init__()
         self._title = title
+        self._full = ""
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(40)
         self.setMinimumWidth(150)
@@ -70,12 +75,19 @@ class StepButton(QPushButton):
         )
         self._name.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 13px; font-weight: 600; color: {ink};')
         self._status.setStyleSheet(f"font-size: 11px; color: {sub};")
-        # A long part number is cut with an ellipsis, never mid-letter; the full text is in the tooltip.
+        self._full = status
+        self._fit()
+
+    def _fit(self) -> None:
+        """A text that does not fit is cut with an ellipsis, never mid-letter; the tooltip has all of it."""
         room = max(40, self.width() - 22)
-        shown = self._status.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, room)
-        self.setToolTip(status if shown != status else "")
-        status = shown
-        self._status.setText(status)
+        shown = self._status.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, room)
+        self.setToolTip(self._full if shown != self._full else "")
+        self._status.setText(shown)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
 
 
 class Workbench(QWidget):
@@ -85,8 +97,12 @@ class Workbench(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("page")
+        self.setAcceptDrops(True)
         self.project = Project()
-        self.result: CalibrationResult | None = None
+        self.rig: RigResult | None = None       # two cameras: both results and how the cameras sit to each other
+        self._result: CalibrationResult | None = None
+        self._cam = 0                           # the camera whose images are added to and whose result is shown
+        self._left_out = ""                     # said once more after the calibration that follows adding images
         self._worker: Worker | None = None
         self._current = -1
 
@@ -107,6 +123,22 @@ class Workbench(QWidget):
         root.addWidget(rule("inkrule"))
         root.addWidget(self._footer())
         self._refresh()
+
+    @property
+    def result(self) -> CalibrationResult | None:
+        """The result on show: the only camera's, or with two cameras the selected one's."""
+        return self._result
+
+    @result.setter
+    def result(self, value: CalibrationResult | None) -> None:
+        self._result = value
+        if value is None:
+            self.rig = None
+
+    def _result_of(self, camera: int) -> CalibrationResult | None:
+        if self.rig is not None:
+            return self.rig.second if camera else self.rig.first
+        return None if self.project.second_camera else self._result
 
     # ---------------------------------------------------------------- layout
     def _header(self) -> QWidget:
@@ -129,7 +161,12 @@ class Workbench(QWidget):
         h.addWidget(home)
         h.addSpacing(16)
         self.steps = [StepButton(t) for t in ("1 Target", "2 Images", "3 Detect", "4 Calibrate", "5 Export")]
-        self.steps[0].setMinimumWidth(168)  # room for a part number such as CT-APR-P-800X600-T36
+        # The first step shows the part number and needs room for one such as CT-APR-P-800X600-T36;
+        # the others give up a little so that the header still fits a 1360 px window.
+        self.steps[0].setFixedWidth(164)
+        for s in self.steps[1:]:
+            s.setMinimumWidth(126)   # they narrow when a long project name needs the room
+            s.setMaximumWidth(140)
         actions = (self._goto_target, self.add_images, self.run_detection, self.run_calibration, self.export_all)
         for s, act in zip(self.steps, actions):
             s.clicked.connect(act)
@@ -153,9 +190,39 @@ class Workbench(QWidget):
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 16, 0, 16)
         v.setSpacing(10)
+        # Cameras: only shown once there is a second one.
+        self.cams_box = QWidget()
+        cb = QVBoxLayout(self.cams_box)
+        cb.setContentsMargins(16, 0, 16, 2)
+        cb.setSpacing(6)
+        cb.addWidget(label("CAMERAS", "eyebrow"))
+        self.cam_rows = []
+        for i in range(2):
+            row_ = frame("sheet")
+            row_.setCursor(Qt.CursorShape.PointingHandCursor)
+            row_.setToolTip("Select this camera: images are added to it, and its own result is shown.")
+            row_.mouseReleaseEvent = lambda _e, which=i: self._select_camera(which)
+            rh = QHBoxLayout(row_)
+            rh.setContentsMargins(10, 7, 10, 7)
+            rh.setSpacing(8)
+            col = QVBoxLayout()
+            col.setSpacing(1)
+            col.addWidget(label(f"Camera {i + 1}", font=T.mono(13, 600)))
+            sub = label("", "small")
+            col.addWidget(sub)
+            rh.addLayout(col, 1)
+            err = label("", font=T.mono(13, 600))
+            rh.addWidget(err, 0, Qt.AlignmentFlag.AlignVCenter)
+            cb.addWidget(row_)
+            self.cam_rows.append((row_, sub, err))
+        v.addWidget(self.cams_box)
+        self.cams_rule = rule()
+        v.addWidget(self.cams_rule)
+
         head = QHBoxLayout()
         head.setContentsMargins(16, 0, 16, 0)
-        head.addWidget(label("IMAGES", "eyebrow"))
+        self.images_head = label("IMAGES", "eyebrow")
+        head.addWidget(self.images_head)
         head.addStretch(1)
         self.images_count = label("", "small")
         head.addWidget(self.images_count)
@@ -189,6 +256,17 @@ class Workbench(QWidget):
         row.addWidget(add, 1)
         row.addWidget(self.toggle_btn, 1)
         v.addLayout(row)
+        self.camera_link = QPushButton("Add a second camera")
+        self.camera_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.camera_link.setStyleSheet(
+            f'border: 0; background: transparent; padding: 0; min-height: 0; text-align: left; color: {T.INK_MUTED}; '
+            f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500; text-decoration: underline;')
+        self.camera_link.clicked.connect(self._toggle_second_camera)
+        link_row = QHBoxLayout()
+        link_row.setContentsMargins(16, 0, 16, 0)
+        link_row.addWidget(self.camera_link)
+        link_row.addStretch(1)
+        v.addLayout(link_row)
 
         card = frame("sheet")
         card.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -215,7 +293,16 @@ class Workbench(QWidget):
         v.setSpacing(0)
         self.view = ImageView()
         self.view.corrected_toggled.connect(lambda _on: self._show(self._current))
-        v.addWidget(self.view, 1)
+        self.view2 = ImageView()                 # the second camera's image of the same pair
+        self.view2.corrected_btn.hide()          # one button, on the first view, switches both
+        self.view_rule = rule("vrule")
+        views = QHBoxLayout()
+        views.setContentsMargins(0, 0, 0, 0)
+        views.setSpacing(0)
+        views.addWidget(self.view, 1)
+        views.addWidget(self.view_rule)
+        views.addWidget(self.view2, 1)
+        v.addLayout(views, 1)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(6)
@@ -229,7 +316,8 @@ class Workbench(QWidget):
         b.setSpacing(24)
         left = QVBoxLayout()
         left.setSpacing(6)
-        left.addWidget(label("ERROR PER IMAGE", "eyebrow"))
+        self.chart_head = label("ERROR PER IMAGE", "eyebrow")
+        left.addWidget(self.chart_head)
         self.chart = ErrorChart()
         self.chart.toggled.connect(self._toggle)
         self.chart.selected.connect(self._select_row)
@@ -237,13 +325,39 @@ class Workbench(QWidget):
         b.addLayout(left, 1)
         right = QVBoxLayout()
         right.setSpacing(6)
-        right.addWidget(label("COVERAGE", "eyebrow"))
+        heads = QHBoxLayout()
+        heads.setSpacing(12)
+        self.map_tabs = []
+        for text, tip in (("COVERAGE", "Where in the image the detected points fell"),
+                          ("UNCERTAINTY", "How well the result is pinned down across the image"),
+                          ("RESIDUALS", "What is left over after the fit, across the image")):
+            b_ = QPushButton(text)
+            b_.setCursor(Qt.CursorShape.PointingHandCursor)
+            b_.setToolTip(tip)
+            b_.setCheckable(True)
+            b_.clicked.connect(lambda _on, which=len(self.map_tabs): self._show_map(which))
+            heads.addWidget(b_)
+            self.map_tabs.append(b_)
+        heads.addStretch(1)
+        right.addLayout(heads)
         self.coverage = CoverageMap()
         right.addWidget(self.coverage)
+        self._show_map(0)
         right.addStretch(1)
         b.addLayout(right)
         v.addWidget(bottom)
         return w
+
+    def _show_map(self, which: int) -> None:
+        """Switch the small map between point coverage and projection uncertainty."""
+        for i, b_ in enumerate(self.map_tabs):
+            b_.setChecked(i == which)
+            ink = T.INK if i == which else T.INK_MUTED
+            b_.setStyleSheet(
+                f'border: 0; border-bottom: 2px solid {T.INK if i == which else "transparent"}; '
+                f'background: transparent; padding: 0 0 2px 0; min-height: 0; color: {ink}; '
+                f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
+        self.coverage.set_mode(which == 1, residuals=which == 2)
 
     def _right(self) -> QWidget:
         w = QWidget()
@@ -297,6 +411,8 @@ class Workbench(QWidget):
             s.setDecimals(3)
             s.setSuffix(" mm")
             s.setValue(val)
+        self.marker.setMinimum(0.0)  # 0 stands for "not known" where the field is optional (circle diameter)
+        self.marker.setSpecialValueText("not set")
         self.first_id = QSpinBox()
         self.first_id.setRange(0, 9999)
         self.first_id.setToolTip("Boards in a set often continue the numbering: board 2 starts where board 1 ends.")
@@ -362,6 +478,14 @@ class Workbench(QWidget):
         v.addSpacing(8)
         self.model_hint = label("", "small", wrap=True)
         v.addWidget(self.model_hint)
+        v.addSpacing(16)
+        v.addWidget(label("BOARD", "eyebrow"))
+        self.opt_board = QCheckBox("Estimate the shape of the board")
+        self.opt_board.toggled.connect(self._options_changed)
+        v.addWidget(self.opt_board)
+        v.addWidget(label("Leave this off for a flat, accurately made board. Tick it when the findings say the "
+                          "images fit a board that is out of flat, or for a board printed and glued by hand. "
+                          "The board's shape is then worked out together with the camera.", "small", wrap=True))
         v.addStretch(1)
         self._model_texts()
         return w
@@ -394,9 +518,53 @@ class Workbench(QWidget):
         self.used_note = label("", "muted", wrap=True)
         v.addWidget(self.used_note)
         v.addSpacing(8)
+        # Two cameras: where the second sits, then a switch for whose own numbers follow.
+        self.rig_box = QWidget()
+        rv = QVBoxLayout(self.rig_box)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(6)
+        rv.addWidget(label("CAMERA 2, SEEN FROM CAMERA 1", "eyebrow"))
+        self.rig_keys = ("Apart", "Turned", "X (right), mm", "Y (down), mm", "Z (forward), mm")
+        box = frame("sheet")
+        g = QGridLayout(box)
+        g.setContentsMargins(12, 6, 12, 6)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(2)
+        self.rig_values = {}
+        for i, k in enumerate(self.rig_keys):
+            g.addWidget(label(k, font=T.mono(13), color=T.INK_MUTED), i, 0)
+            val = label("–", font=T.mono(13, 600))
+            g.addWidget(val, i, 1, Qt.AlignmentFlag.AlignRight)
+            self.rig_values[k] = val
+        g.setColumnStretch(1, 1)
+        rv.addWidget(box)
+        self.rig_note = label("", "small", wrap=True)
+        self.rig_note.setToolTip(
+            "X, Y and Z are where camera 2 sits in camera 1's own directions: to its right, downwards, and the way "
+            "it looks. ± is one standard deviation from the scatter of the detected points and from how well each "
+            "camera's own parameters are known.")
+        rv.addWidget(self.rig_note)
+        rv.addSpacing(8)
+        tabs_row = QHBoxLayout()
+        tabs_row.setSpacing(12)
+        self.cam_tabs = []
+        for i in range(2):
+            b_ = QPushButton(f"CAMERA {i + 1}")
+            b_.setCursor(Qt.CursorShape.PointingHandCursor)
+            b_.clicked.connect(lambda _on, which=i: self._select_camera(which))
+            tabs_row.addWidget(b_)
+            self.cam_tabs.append(b_)
+        tabs_row.addStretch(1)
+        rv.addLayout(tabs_row)
+        v.addWidget(self.rig_box)
         v.addWidget(label("INTRINSICS, PX", "eyebrow"))
         self.intr = self._kv_grid(("fx", "fy", "cx", "cy"))
         v.addWidget(self.intr[0])
+        self.intr_note = label("", "small", wrap=True)
+        self.intr_note.setToolTip(
+            "One standard deviation, worked out from the scatter of the detected points. It does not cover "
+            "a board that is not flat or not the size entered, or a lens model that does not fit the lens.")
+        v.addWidget(self.intr_note)
         v.addSpacing(8)
         v.addWidget(label("DISTORTION", "eyebrow"))
         self.dist_box = frame("sheet")
@@ -411,7 +579,14 @@ class Workbench(QWidget):
         self.findings.setSpacing(6)
         v.addLayout(self.findings)
         v.addStretch(1)
-        return w
+        # Many lens terms and several findings do not fit a small window; the panel scrolls then.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        scroll.setWidget(w)
+        return scroll
 
     def _kv_grid(self, keys):
         box = frame("sheet")
@@ -461,6 +636,8 @@ class Workbench(QWidget):
         self.sx.setValue(t.squares_x)
         self.sy.setValue(t.squares_y)
         self.square.setValue(t.square_mm)
+        if t.is_circles:
+            self.marker.setValue(t.marker_mm or 0.0)
         if t.kind in (CHARUCO, *MARKER_GRIDS):
             self.marker.setValue(t.marker_mm)
             self.dictionary.setCurrentText(t.dictionary)
@@ -481,6 +658,9 @@ class Workbench(QWidget):
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
                                 self.marker.value(), self.dictionary.currentText(),
                                 first_marker_id=self.first_id.value())
+            elif kind in (CIRCLES, ASYMMETRIC_CIRCLES):
+                target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
+                                self.marker.value() or None)
             else:
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value())
             # The part number stays only while the fields still describe that board.
@@ -498,6 +678,7 @@ class Workbench(QWidget):
             k3=self.opt_k3.isChecked(), tangential=self.opt_tangential.isChecked(),
             rational=self.opt_rational.isChecked(), thin_prism=self.opt_prism.isChecked(),
             fisheye=bool(self.lens_kind.currentData()),
+            release_board=self.opt_board.isChecked(),
         )
 
     def _target_changed(self, *_):
@@ -511,8 +692,24 @@ class Workbench(QWidget):
                 self.dictionary.blockSignals(True)
                 self.dictionary.setCurrentText("DICT_APRILTAG_36h11" if kind == APRILGRID else "DICT_5X5_250")
                 self.dictionary.blockSignals(False)
+        circles = kind in (CIRCLES, ASYMMETRIC_CIRCLES)
+        if kind != self._last_kind:
+            # The same field holds a marker size, a gap or a circle diameter; do not carry one over as another.
+            was_circles = self._last_kind in (CIRCLES, ASYMMETRIC_CIRCLES)
+            fresh = None
+            if circles and not was_circles:
+                fresh = 0.0
+            elif kind == CHARUCO and self._last_kind != CHARUCO:
+                fresh = round(0.75 * self.square.value(), 3)
+            elif kind in MARKER_GRIDS and self._last_kind not in MARKER_GRIDS:
+                fresh = round(0.3 * self.square.value(), 3)
+            if fresh is not None:
+                self.marker.blockSignals(True)
+                self.marker.setValue(fresh)
+                self.marker.blockSignals(False)
         self._last_kind = kind
-        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap"}.get(kind, "Marker size"))
+        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap", CIRCLES: "Circle diameter",
+                                   ASYMMETRIC_CIRCLES: "Circle diameter"}.get(kind, "Marker size"))
         self.first_id_label.setText("First tag ID" if kind == APRILGRID else "First marker ID")
         if kind == ARUCO_GRID:
             names = ("Markers across", "Markers down", "Marker size")
@@ -526,20 +723,23 @@ class Workbench(QWidget):
                     "Part of the grid in the image is enough.")
         elif kind == CIRCLES:
             names = ("Circles across", "Circles down", "Spacing")
-            note = "For any other board: count the circles, and measure from the centre of one to the centre of the next."
+            note = ("For any other board: count the circles, and measure from the centre of one to the centre "
+                    "of the next. With the diameter entered, the centres are corrected for perspective.")
         elif kind == ASYMMETRIC_CIRCLES:
             names = ("Columns", "Rows", "Lattice spacing")
             note = ("Columns and rows count the positions of the square lattice the circles sit on; "
-                    "every other position holds a circle. The whole grid must be in every image.")
+                    "every other position holds a circle. The whole grid must be in every image. "
+                    "With the diameter entered, the centres are corrected for perspective.")
         else:
             names = ("Squares across", "Squares down", "Square size")
             note = "For any other board: count squares, not inner corners, and measure one square."
         for wdg, text in zip((self.sx_label, self.sy_label, self.square_label), names):
             wdg.setText(text)
         self.target_note.setText(note)
-        for wdg in (self.marker, self.dictionary, self.marker_label, self.dict_label,
-                    self.first_id, self.first_id_label):
+        for wdg in (self.dictionary, self.dict_label, self.first_id, self.first_id_label):
             wdg.setVisible(tags)
+        for wdg in (self.marker, self.marker_label):
+            wdg.setVisible(tags or circles)
         self.legacy.setVisible(charuco)
         target = self.current_target()
         board = find_board(target.part_number) if target is not None else None
@@ -597,6 +797,7 @@ class Workbench(QWidget):
     def load_project(self, project: Project) -> None:
         self.project = project
         self.result = None
+        self._cam = 0
         self.view.corrected_btn.setChecked(False)  # every project opens on the images as they were taken
         t = project.target
         if t is not None:
@@ -606,7 +807,8 @@ class Workbench(QWidget):
             self.preset.blockSignals(False)
         o = project.options
         for box, val in ((self.opt_k3, o.k3), (self.opt_tangential, o.tangential),
-                         (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism)):
+                         (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism),
+                         (self.opt_board, o.release_board)):
             box.blockSignals(True)
             box.setChecked(val)
             box.blockSignals(False)
@@ -621,6 +823,57 @@ class Workbench(QWidget):
         if any(d.usable for d in self.project.detections):
             self.run_calibration()
 
+    # ------------------------------------------------------- dropped files
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        """Image files, or folders with images in them (one level of subfolders, for left/ and right/)."""
+        found = []
+        for url in e.mimeData().urls():
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                inside = sorted(path.iterdir())
+                for item in inside:
+                    found.extend(sorted(item.iterdir()) if item.is_dir() else [item])
+            else:
+                found.append(path)
+        images = [str(f) for f in found if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES]
+        if images:
+            e.acceptProposedAction()
+            self.add_images(images)
+
+    # --------------------------------------------------------------- cameras
+    def _select_camera(self, which: int) -> None:
+        if not self.project.second_camera or which == self._cam:
+            return
+        self._cam = which
+        self._result = self._result_of(which)
+        self._refresh()
+
+    def _toggle_second_camera(self) -> None:
+        p = self.project
+        if self._busy():
+            return
+        if not p.second_camera:
+            p.second_camera = True
+            self._cam = 1
+            self.result = None
+            self._say("Camera 2 added. Add its images: they pair with camera 1's in file-name order.")
+        else:
+            if p.second_image_paths and QMessageBox.question(
+                    self, "Plumbline", "Remove camera 2 and its images from this project?") \
+                    != QMessageBox.StandardButton.Yes:
+                return
+            p.second_camera, p.second_image_paths, p.second_detections = False, [], []
+            self._cam = 0
+            self.result = None
+            self._say("Camera 2 removed.")
+        self._refresh()
+        if not p.second_camera and any(d.usable for d in p.detections):
+            self.run_calibration()
+
     def reset(self) -> None:
         self.load_project(Project(target=self.current_target()))
         self._say("")
@@ -632,13 +885,39 @@ class Workbench(QWidget):
     def add_images(self, paths: list[str] | None = None):
         if not paths:
             paths, _ = QFileDialog.getOpenFileNames(self, "Add images", "", IMAGE_FILTER)
-        known = set(self.project.image_paths)
+        pr = self.project
+        known = set(pr.image_paths) | set(pr.second_image_paths)
         new = [p for p in paths if p not in known]
         if not new:
             return
-        self.project.image_paths.extend(new)
+        # Images of two cameras handed over together: the file names tell them apart and pair them.
+        fresh = not pr.image_paths and not pr.second_image_paths
+        level = pr.second_camera and len(pr.image_paths) == len(pr.second_image_paths)
+        split = split_by_camera(new) if fresh or level else None
+        if split is not None:
+            pr.second_camera = True
+            pr.image_paths.extend(split.first)
+            pr.second_image_paths.extend(split.second)
+            pr.detections, pr.second_detections = [], []
+            said = (f"Two cameras found in the file names ({split.labels[0]} / {split.labels[1]}): "
+                    f"{len(split.first)} pairs.")
+            if split.alone:
+                k = len(split.alone)
+                self._left_out = (f" {k} image{'' if k == 1 else 's'} without a partner "
+                                  f"{'was' if k == 1 else 'were'} left out.")
+                said += self._left_out
+        elif pr.second_camera:
+            # Added to the selected camera. Pairs then go by file-name order within each camera.
+            mine = pr.paths_of(self._cam)
+            mine.extend(new)
+            mine.sort(key=natural)
+            pr.detections, pr.second_detections = [], []
+            said = f"{len(new)} images added to camera {self._cam + 1}."
+        else:
+            pr.image_paths.extend(new)
+            said = f"{len(new)} images added."
         self.result = None
-        self._say(f"{len(new)} images added.")
+        self._say(said)
         self._refresh()
         if self.project.target is not None:
             self.run_detection()
@@ -649,22 +928,24 @@ class Workbench(QWidget):
             self.tabs.setCurrentIndex(0)
             self._say("Fix the target settings first.")
             return
-        if not self.project.image_paths:
+        if not self.project.paths_of(self._cam if self.project.second_camera else 0):
             self.add_images()
             return
         if self._busy():
             return
         paths = list(self.project.image_paths)
+        paths2 = list(self.project.second_image_paths) if self.project.second_camera else []
 
         def job(progress):
             out = []
-            for i, p in enumerate(paths):
+            for i, p in enumerate(paths + paths2):
                 out.append(detect_file(p, target))
-                progress(i + 1, len(paths))
+                progress(i + 1, len(paths) + len(paths2))
             return out
 
         def done(dets):
-            self.project.detections = dets
+            self.project.detections = dets[:len(paths)]
+            self.project.second_detections = dets[len(paths):]
             self.project.excluded = set()
             self.result = None
             good = sum(d.usable for d in dets)
@@ -686,6 +967,28 @@ class Workbench(QWidget):
         if self._busy():
             return
         options, excluded = self.project.options, set(self.project.excluded)
+        if self.project.second_camera:
+            dets2 = self.project.second_detections
+            if len(dets) != len(dets2):
+                self.result = None
+                self._say(f"Camera 1 has {len(dets)} images and camera 2 has {len(dets2)}. "
+                          "Every pair needs one image from each camera, taken at the same moment.")
+                self._refresh()
+                return
+
+            def done_rig(rig: RigResult):
+                self.rig = rig
+                self._result = rig.second if self._cam else rig.first
+                self.project.last_rms_point = rig.rms_point
+                self.tabs.setCurrentIndex(2)
+                self._say(f"Calibrated 2 cameras from {len(rig.pairs)} pairs, RMS {rig.rms_point:.3f} px."
+                          + self._left_out)
+                self._left_out = ""
+                self._refresh()
+
+            self._start(lambda _p: calibrate_pair(dets, dets2, target, options, options, excluded), done_rig,
+                        "Calibrating")
+            return
 
         def done(result: CalibrationResult):
             self.result = result
@@ -697,17 +1000,22 @@ class Workbench(QWidget):
         self._start(lambda _p: calibrate(dets, target, options, excluded), done, "Calibrating")
 
     def export_all(self):
-        if self.result is None:
+        rig = self.rig if self.project.second_camera else None
+        if self.result is None or (self.project.second_camera and rig is None):
             self._say("Calibrate first, then export.")
             return
-        dialog = ExportDialog(self.project, self.result, self)
+        dialog = ExportDialog(self.project, self.result, self, rig=rig)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
         self.export_to(dialog.folder, dialog.project_name, dialog.formats(), dialog.recheck_months)
 
     def export_to(self, folder: str, name: str | None = None, formats: set[str] | None = None,
                   recheck_months: int | None = None):
-        """Write one revision: the chosen files plus the project file, all named after the project."""
+        """Write one revision: the chosen files plus the project file, all named after the project.
+
+        With two cameras every chosen file is written once per camera (cam1, cam2), and two more
+        files say how camera 2 sits relative to camera 1.
+        """
         base = Path(folder)
         if name:
             self.project.title = safe_name(name)
@@ -715,45 +1023,70 @@ class Workbench(QWidget):
         formats = set(formats) if formats is not None else {"report", "opencv_yaml", "json", "ros"}
         if "example" in formats:
             formats.add("opencv_yaml")  # the example reads this file
-        signature = result_signature(self.result)
+        rig = self.rig if self.project.second_camera else None
+        signature = rig_signature(rig) if rig is not None else result_signature(self.result)
         revision = self.project.revision_for(signature)
-        files = export_files(name, revision)
         written = []
-        if "opencv_yaml" in formats:
-            export.write_opencv_yaml(self.result, base / files["opencv_yaml"])
-            written.append(files["opencv_yaml"])
-        if "opencv_xml" in formats:
-            export.write_opencv_xml(self.result, base / files["opencv_xml"])
-            written.append(files["opencv_xml"])
-        if "json" in formats:
-            export.write_json(self.result, base / files["json"])
-            written.append(files["json"])
-        if "ros" in formats and export.ros_distortion_model(self.result):
-            export.write_ros_camera_info(self.result, base / files["ros"], safe_name(name))
-            written.append(files["ros"])
-        if "xlsx" in formats:
-            write_xlsx(self.result, self.project.detections, base / files["xlsx"], name, revision)
-            written.append(files["xlsx"])
-        if "maps" in formats:
-            write_maps(self.result, base / files["maps"])
-            written.append(files["maps"])
-        if "example" in formats:
-            write_example(self.result, base / files["example"], files["opencv_yaml"],
-                          files["maps"] if "maps" in formats else None)
-            written.append(files["example"])
-        if "report" in formats:
-            write_report(self.result, self.project.detections, base / files["report"], name, revision)
-            written.append(files["report"])
-        written.append(files["project"])
+        if rig is not None:
+            for cam, result, dets in ((1, rig.first, self.project.detections), (2, rig.second, self.project.second_detections)):
+                written += self._write_camera(result, dets, base, export_files(name, revision, cam), formats,
+                                              f"{name} · camera {cam}", revision, f"{safe_name(name)}_cam{cam}",
+                                              f"Camera {cam} of 2")
+            both = rig_files(name, revision)
+            own = tuple(export_files(name, revision, cam)["json" if "json" in formats else "opencv_yaml"] for cam in (1, 2))
+            export.write_rig_json(rig, base / both["rig_json"],
+                                  own if formats & {"json", "opencv_yaml"} else None)
+            export.write_rig_yaml(rig, base / both["rig_yaml"])
+            written += [both["rig_json"], both["rig_yaml"]]
+        else:
+            written += self._write_camera(self.result, self.project.detections, base, export_files(name, revision),
+                                          formats, name, revision, safe_name(name))
+        project_file = export_files(name, revision)["project"]
+        written.append(project_file)
         self.project.revision, self.project.export_signature = revision, signature
         self.project.exported_on = date.today().isoformat()
         if recheck_months is not None:
             self.project.recheck_months = recheck_months
-        self.project.save(str(base / files["project"]))
-        self.project_saved.emit(self.project.path, self.project.target.describe(), self.result.rms_point,
-                                self.project.due_date())
-        self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
+        self.project.save(str(base / project_file))
+        self.project_saved.emit(self.project.path, self.project.target.describe(),
+                                rig.rms_point if rig is not None else self.result.rms_point, self.project.due_date())
+        if rig is not None:   # too many names for one line: the count, and where they are
+            self._say(f"Revision {revision} saved to {base}: {len(written)} files, for camera 1, camera 2 and both.")
+        else:
+            self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
         self._refresh()
+
+    @staticmethod
+    def _write_camera(result, detections, base: Path, files: dict, formats: set, title: str, revision: int,
+                      ros_name: str, kind: str = "Single camera") -> list[str]:
+        """The chosen files for one camera. Returns the names written."""
+        written = []
+        if "opencv_yaml" in formats:
+            export.write_opencv_yaml(result, base / files["opencv_yaml"])
+            written.append(files["opencv_yaml"])
+        if "opencv_xml" in formats:
+            export.write_opencv_xml(result, base / files["opencv_xml"])
+            written.append(files["opencv_xml"])
+        if "json" in formats:
+            export.write_json(result, base / files["json"])
+            written.append(files["json"])
+        if "ros" in formats and export.ros_distortion_model(result):
+            export.write_ros_camera_info(result, base / files["ros"], ros_name)
+            written.append(files["ros"])
+        if "xlsx" in formats:
+            write_xlsx(result, detections, base / files["xlsx"], title, revision)
+            written.append(files["xlsx"])
+        if "maps" in formats:
+            write_maps(result, base / files["maps"])
+            written.append(files["maps"])
+        if "example" in formats:
+            write_example(result, base / files["example"], files["opencv_yaml"],
+                          files["maps"] if "maps" in formats else None)
+            written.append(files["example"])
+        if "report" in formats:
+            write_report(result, detections, base / files["report"], title, revision, kind)
+            written.append(files["report"])
+        return written
 
     def rename_project(self):
         text, ok = QInputDialog.getText(self, "Project name", "Name used for this project and its exported files:",
@@ -763,8 +1096,7 @@ class Workbench(QWidget):
             self._refresh()
 
     def _toggle(self, index: int):
-        dets = self.project.detections
-        if index < 0 or index >= len(dets) or not dets[index].usable:
+        if not self._row_usable(index):
             return
         self.project.excluded ^= {index}
         self.run_calibration()
@@ -803,44 +1135,84 @@ class Workbench(QWidget):
             return None
         return next((v for v in self.result.views if v.index == index), None)
 
+    def _row_usable(self, index: int) -> bool:
+        """A row can be excluded or restored if at least one of its images shows the target."""
+        cams = (0, 1) if self.project.second_camera else (0,)
+        for cam in cams:
+            dets = self.project.detections_of(cam)
+            if 0 <= index < len(dets) and dets[index].usable:
+                return True
+        return False
+
     def _show(self, row: int):
         self._current = row
-        paths, dets = self.project.image_paths, self.project.detections
+        two = self.project.second_camera
+        self.view2.setVisible(two)
+        self.view_rule.setVisible(two)
+        if two:
+            self._show_one(self.view, 0, row, self._result_of(0))
+            self._show_one(self.view2, 1, row, self._result_of(1))
+        else:
+            self._show_one(self.view, 0, row, self.result)
+        self._update_toggle()
+        self._refresh_chart()
+
+    def _show_one(self, view: ImageView, cam: int, row: int, r: CalibrationResult | None) -> None:
+        """Put one camera's image of the selected row into a view."""
+        two = self.project.second_camera
+        paths, dets = self.project.paths_of(cam), self.project.detections_of(cam)
         if row < 0 or row >= len(paths):
-            self.view.allow_corrected(False)
-            self.view.set_message(self._empty_message())
-            self._update_toggle()
+            view.allow_corrected(False)
+            if not two:
+                view.set_message(self._empty_message())
+            elif not paths:
+                view.set_message(f"Camera {cam + 1}\n\nNo images yet.\n\nSelect this camera on the left\nand add its images.")
+            else:
+                view.set_message(f"Camera {cam + 1}\n\nNo image for this pair.")
             return
         det = dets[row] if row < len(dets) else None
-        view = self._view_for(row)
+        fit = next((v for v in r.views if v.index == row), None) if r is not None else None
         name = Path(paths[row]).name
         word = self.project.target.point_word if self.project.target else "corners"
-        if det is None:
+        if two:
+            # Half the width: the caption keeps to what tells the two images apart.
+            name = f"Camera {cam + 1} · {name}"
+            if det is None:
+                caption = f"{name} · not checked yet"
+            elif det.count == 0 or not det.usable:
+                caption = f"{name} · {det.note}"
+            elif fit is not None:
+                caption = f"{name} · {det.count} {word} · {fit.rms_point:.3f} px"
+            else:
+                caption = f"{name} · {det.count} {word}"
+        elif det is None:
             caption = f"{name} · not checked yet"
         elif det.count == 0 or not det.usable:
             caption = f"{name} · {det.note}"
-        elif view is not None:
+        elif fit is not None:
             caption = (f"{name} · {det.width} × {det.height} · {det.count} {word} · "
-                       f"{view.rms_point:.3f} px · residuals ×{RESIDUAL_GAIN}")
+                       f"{fit.rms_point:.3f} px · residuals ×{RESIDUAL_GAIN}")
         else:
             caption = f"{name} · {det.width} × {det.height} · {det.count} {word}"
         corners = det.corners if det is not None else np.zeros((0, 2))
         gray = read_gray(paths[row])
-        residuals = view.residuals if view else None
-        r = self.result
-        self.view.allow_corrected(r is not None)
+        residuals = fit.residuals if fit else None
+        if view is self.view:
+            view.allow_corrected(r is not None)
         if gray is not None and r is not None and self.view.corrected:
             gray, corners, _ = lens.corrected_view(gray, corners, r.camera_matrix, r.distortion, r.fisheye)
             residuals = None
             caption = caption.replace(f" · residuals ×{RESIDUAL_GAIN}", "") + " · corrected view"
-        self.view.set_image(gray, corners, residuals, caption)
-        self._update_toggle()
-        self._refresh_chart()
+        view.set_image(gray, corners, residuals, caption)
+        # Ring the board points that are off the same way in every image, where this image shows them.
+        if r is not None and r.points is not None and det is not None and len(corners):
+            wanted = {int(r.points.ids[i]) for i in trusted_suspects(r)}
+            if wanted:
+                view.set_rings(np.asarray(corners)[[k for k, pid in enumerate(det.ids.tolist())
+                                                    if pid in wanted]])
 
     def _update_toggle(self):
-        dets = self.project.detections
-        ok = 0 <= self._current < len(dets) and dets[self._current].usable
-        self.toggle_btn.setEnabled(ok)
+        self.toggle_btn.setEnabled(self._row_usable(self._current))
         self.toggle_btn.setText("Restore" if self._current in self.project.excluded else "Exclude")
 
     def _empty_message(self) -> str:
@@ -851,6 +1223,13 @@ class Workbench(QWidget):
 
     def _refresh_chart(self):
         bars = []
+        if self.project.second_camera:
+            # One bar per pair: both images together. A pair that takes no part has no bar.
+            by_index = {q.index: q.rms_point for q in self.rig.pairs} if self.rig is not None else {}
+            for i in range(self.project.pair_count):
+                bars.append((i, by_index.get(i), i in self.project.excluded, f"pair {i + 1:02d}"))
+            self.chart.set_data(bars, self._current)
+            return
         for i, p in enumerate(self.project.image_paths):
             v = self._view_for(i)
             err = v.rms_point if v else None
@@ -867,11 +1246,21 @@ class Workbench(QWidget):
         dets = p.detections
         n = len(p.image_paths)
         shown = p.name if len(p.name) <= 20 else p.name[:19] + "\u2026"
-        self.name_btn.setText(shown + (f" \u00b7 r{p.revision}" if p.revision else ""))
+        full = shown + (f" \u00b7 r{p.revision}" if p.revision else "")
+        # The header has room for about 20 characters here; a longer name is cut, never the layout.
+        cut = full if len(full) <= 20 else full[:19] + "\u2026"
+        self.name_btn.setText(cut)
+        self.name_btn.setToolTip((full + "\n" if cut != full else "")
+                                 + "Rename this project. Exported files carry this name.")
+        two = p.second_camera
+        self._lay_out_for(two)
+        if two:
+            self._fill_pairs()
+            n = p.pair_count
         keep = self._current
         self.table.blockSignals(True)
         self.table.setRowCount(n)
-        for i, path in enumerate(p.image_paths):
+        for i, path in enumerate(() if two else p.image_paths):
             det = dets[i] if i < len(dets) else None
             view = self._view_for(i)
             excluded = i in p.excluded
@@ -898,10 +1287,15 @@ class Workbench(QWidget):
         if n:
             self.table.selectRow(keep)
         self._show(keep if n else -1)
-        self.images_count.setText(f"{n} loaded" if n else "")
+        if two:
+            used = len(self.rig.pairs) if self.rig is not None else 0
+            self.images_count.setText(f"{n} pairs · {used} used" if n else "")
+        else:
+            self.images_count.setText(f"{n} loaded" if n else "")
 
-        # Coverage from the images that take part.
-        active = [d for i, d in enumerate(dets) if d.usable and i not in p.excluded]
+        # Coverage from the images that take part, of the camera on show.
+        shown = p.detections_of(self._cam if two else 0)
+        active = [d for i, d in enumerate(shown) if d.usable and i not in p.excluded]
         if active:
             grid, share = coverage_grid(active, active[0].width, active[0].height)
             self.coverage.set_grid(grid, share)
@@ -909,20 +1303,31 @@ class Workbench(QWidget):
             share = 0.0
             self.coverage.set_grid(None)
         self._refresh_chart()
+        res = self.result
+        self.coverage.set_uncertainty(res.projection.sd if res is not None and res.projection is not None else None)
+        self.coverage.set_residuals(res.pattern.mean if res is not None and res.pattern is not None else None)
 
         # Header steps.
         t = p.target
+        if two:
+            dets = list(p.detections) + list(p.second_detections)
+            n_images = len(p.image_paths) + len(p.second_image_paths)
         good = sum(d.usable for d in dets)
-        states = [
-            ("done" if t else "next", t.short_label if t else "Check the settings"),
-            ("done" if n else "next" if t else "off", f"{n} loaded" if n else "Add images"),
-            ("done" if dets else "next" if n and t else "off",
-             f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
-            ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
-            ("next" if r else "off", "Parameters and report"),
-        ]
+        rig = self.rig
+        if two:
+            states = [
+                ("done" if t else "next", t.short_label if t else "Check the settings"),
+                ("done" if n_images else "next" if t else "off", f"2 cameras · {n} pairs" if n_images else "Add images"),
+                ("done" if dets else "next" if n_images and t else "off",
+                 f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
+                ("done" if rig else "next" if good else "off", f"RMS {rig.rms_point:.2f} px" if rig else "Solve the cameras"),
+                ("next" if rig else "off", "Files and report"),
+            ]
+        else:
+            states = self._single_states(t, n, dets, good, r)
         for step, (kind, status) in zip(self.steps, states):
             step.set_state(kind, status)
+        self._fill_rig()
 
         # Result tab.
         if r is None:
@@ -931,6 +1336,7 @@ class Workbench(QWidget):
             self.used_note.setText("No result yet.")
             for val in self.intr[1].values():
                 val.setText("–")
+            self.intr_note.setText("")
             self._fill_dist([])
             self._fill_findings([])
             return
@@ -945,8 +1351,124 @@ class Workbench(QWidget):
         )
         for k, val in zip(("fx", "fy", "cx", "cy"), (r.fx, r.fy, r.cx, r.cy)):
             self.intr[1][k].setText(f"{val:.2f}")
-        self._fill_dist(list(zip(r.distortion_names, r.distortion)))
+        u = r.uncertainty
+        if u is None:
+            self.intr_note.setText("")
+        else:
+            parts = [f"{k} {u.std_of(k):.2f}" for k in ("fx", "fy", "cx", "cy") if u.std_of(k) is not None]
+            self.intr_note.setText("± one standard deviation, px: " + " · ".join(parts))
+        self._fill_dist(list(zip(r.distortion_names, r.distortion)),
+                        {k: u.std_of(k) for k in r.distortion_names} if u is not None else {})
         self._fill_findings(self._make_findings(r, share))
+        if two and rig is not None:
+            self.rms_big.setText(f"{rig.rms_point:.3f} px")
+            self.rms_note.setText(f"Both cameras together, per point. Camera 1 alone {rig.first.rms_point:.3f} px, "
+                                  f"camera 2 alone {rig.second.rms_point:.3f} px.")
+            points = sum(q.points for q in rig.pairs)
+            left_out = f" · {len(rig.unpaired)} not used" if rig.unpaired else ""
+            self.used_note.setText(f"{len(rig.pairs)} of {n} pairs, {points:,} {r.target.point_word} in both "
+                                   f"cameras' images{left_out}")
+
+    @staticmethod
+    def _single_states(t, n, dets, good, r):
+        return [
+            ("done" if t else "next", t.short_label if t else "Check the settings"),
+            ("done" if n else "next" if t else "off", f"{n} loaded" if n else "Add images"),
+            ("done" if dets else "next" if n and t else "off",
+             f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
+            ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
+            ("next" if r else "off", "Files and report"),
+        ]
+
+    def _lay_out_for(self, two: bool) -> None:
+        """Show or hide what only a project with two cameras needs."""
+        self.cams_box.setVisible(two)
+        self.cams_rule.setVisible(two)
+        self.rig_box.setVisible(two)
+        self.images_head.setText("PAIRS" if two else "IMAGES")
+        self.chart_head.setText("ERROR PER PAIR" if two else "ERROR PER IMAGE")
+        self.chart.per = "pair" if two else "image"
+        self.camera_link.setText("Remove camera 2" if two else "Add a second camera")
+        hh = self.table.horizontalHeader()
+        want = 4 if two else 3
+        if self.table.columnCount() != want:
+            self.table.setColumnCount(want)
+            self.table.setHorizontalHeaderLabels(["Pair", "Cam 1", "Cam 2", "Error, px"] if two
+                                                 else ["File", "Corners", "Error, px"])
+            hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            for c, width in (((1, 58), (2, 58), (3, 84)) if two else ((1, 70), (2, 84))):
+                hh.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+                self.table.setColumnWidth(c, width)
+        for i, (row_, sub, err) in enumerate(self.cam_rows):
+            on = two and i == self._cam
+            row_.setStyleSheet(f"QFrame {{ border: 1px solid {T.INK if on else T.HAIRLINE}; background: {T.SHEET}; }} "
+                               "QLabel { border: 0; background: transparent; }")
+            paths, dets = self.project.paths_of(i), self.project.detections_of(i)
+            size = next((f"{d.width} × {d.height} · " for d in dets if d.width), "")
+            sub.setText(f"{size}{len(paths)} images" if paths else "no images yet")
+            res = self._result_of(i) if two else None
+            err.setText(f"{res.rms_point:.3f} px" if res is not None else "")
+        for i, b_ in enumerate(self.cam_tabs):
+            on = i == self._cam
+            b_.setStyleSheet(
+                f'border: 0; border-bottom: 2px solid {T.INK if on else "transparent"}; background: transparent; '
+                f'padding: 0 0 2px 0; min-height: 0; color: {T.INK if on else T.INK_MUTED}; '
+                f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
+
+    def _fill_pairs(self) -> None:
+        """The table with two cameras: one row per pair."""
+        p = self.project
+        by_index = {q.index: q for q in self.rig.pairs} if self.rig is not None else {}
+        n = p.pair_count
+        self.table.blockSignals(True)
+        self.table.setRowCount(n)
+        for i in range(n):
+            counts, missing = [], False
+            for cam in (0, 1):
+                paths, dets = p.paths_of(cam), p.detections_of(cam)
+                if i >= len(paths):
+                    counts.append("–")
+                    missing = True
+                elif i >= len(dets):
+                    counts.append("")
+                else:
+                    counts.append(str(dets[i].count))
+                    missing = missing or not dets[i].usable
+            excluded = i in p.excluded
+            if excluded:
+                err = "out"
+            elif i in by_index:
+                err = f"{by_index[i].rms_point:.3f}"
+            elif missing and p.image_paths and p.second_image_paths and (p.detections or p.second_detections):
+                err = "no pair"
+            else:
+                err = ""
+            tip = " · ".join(Path(paths[i]).name for paths in (p.image_paths, p.second_image_paths) if i < len(paths))
+            for c, text in enumerate((f"{i + 1:02d}", counts[0], counts[1], err)):
+                item = QTableWidgetItem(text)
+                item.setToolTip(tip)
+                if c:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if excluded or err == "no pair":
+                    item.setForeground(Qt.GlobalColor.darkRed)
+                self.table.setItem(i, c, item)
+        self.table.blockSignals(False)
+
+    def _fill_rig(self) -> None:
+        rig = self.rig
+        if rig is None:
+            for val in self.rig_values.values():
+                val.setText("–")
+            self.rig_note.setText("Where camera 2 sits and how far it is turned, measured from camera 1.")
+            return
+        x, y, z = rig.position
+        texts = (f"{rig.apart_mm:.2f} mm", f"{rig.turned_deg:.2f}°", f"{x:.2f}", f"{y:.2f}", f"{z:.2f}")
+        for k, text in zip(self.rig_keys, texts):
+            self.rig_values[k].setText(text)
+        note = "Where camera 2 sits and how far it is turned, measured from camera 1."
+        if np.isfinite(rig.apart_std_mm):
+            note += f" ± one standard deviation: apart {rig.apart_std_mm:.2f} mm · turned {rig.turned_std_deg:.3f}°"
+        self.rig_note.setText(note)
 
     @staticmethod
     def _clear(lay) -> None:
@@ -962,7 +1484,8 @@ class Workbench(QWidget):
             elif item.layout() is not None:
                 Workbench._clear(item.layout())
 
-    def _fill_dist(self, pairs):
+    def _fill_dist(self, pairs, spread=None):
+        spread = spread or {}
         lay = self.dist_layout
         self._clear(lay)
         if not pairs:
@@ -971,7 +1494,10 @@ class Workbench(QWidget):
         for i, (k, val) in enumerate(pairs):
             row, col = divmod(i, 2)
             lay.addWidget(label(k, font=T.mono(13), color=T.INK_MUTED), row, col * 2)
-            lay.addWidget(label(f"{val:.5f}", font=T.mono(13, 600)), row, col * 2 + 1, Qt.AlignmentFlag.AlignRight)
+            cell = label(f"{val:.5f}", font=T.mono(13, 600))
+            if spread.get(k) is not None:
+                cell.setToolTip(f"{k} = {val:.6f} ± {spread[k]:.6f} (one standard deviation)")
+            lay.addWidget(cell, row, col * 2 + 1, Qt.AlignmentFlag.AlignRight)
         lay.setColumnStretch(1, 1)
         lay.setColumnStretch(3, 1)
         lay.setColumnMinimumWidth(2, 28)

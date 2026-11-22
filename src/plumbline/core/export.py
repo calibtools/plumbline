@@ -37,6 +37,11 @@ def result_summary(result: CalibrationResult) -> dict:
         "camera_matrix": result.camera_matrix.tolist(),
         "distortion_coefficients": dist,
         "distortion_names": result.distortion_names,
+        "uncertainty": result.uncertainty.to_dict() if result.uncertainty else None,
+        "projection_uncertainty": result.projection.to_dict() if result.projection else None,
+        "residual_pattern": result.pattern.to_dict() if result.pattern else None,
+        # The board as estimated, only when the result was solved with it.
+        "board": result.board.to_dict() if result.board is not None and result.options.release_board else None,
         "rms_per_point_px": result.rms_point,
         "rms_per_coordinate_px": result.rms_coordinate,
         "rms_note": (
@@ -170,5 +175,50 @@ def write_opencv_xml(result: CalibrationResult, path: str | Path) -> None:
         fs.write("per_view_max_errors", np.array([[v.max_error] for v in result.views], np.float64))
         fs.write("rotation_vectors", np.array([v.rvec for v in result.views], np.float64))
         fs.write("translation_vectors_mm", np.array([v.tvec for v in result.views], np.float64))
+    finally:
+        fs.release()
+
+
+# ------------------------------------------------------------- two cameras
+def rig_summary(rig, files: tuple[str, str] | None = None) -> dict:
+    """How camera 2 sits relative to camera 1, with both cameras' own parameters alongside."""
+    out = {
+        "generator": f"Plumbline {__version__} by Calib.Tools, https://calib.tools",
+        "convention": "x2 = rotation @ x1 + translation_mm: a point in camera 1 coordinates, in camera 2 coordinates. "
+                      "Camera axes as in OpenCV: x to the right, y down, z the way the camera looks.",
+        **rig.to_dict(),
+        "std": {"rotation_vector_rad": [float(v) for v in rig.std[:3]],
+                "translation_mm": [float(v) for v in rig.std[3:]],
+                "note": "One standard deviation, from the scatter of the detected points and from how well "
+                        "each camera's own parameters are known."},
+        "pairs": [{"pair": p.index + 1, "rms_point": p.rms_point, "points": p.points} for p in rig.pairs],
+        "camera_1": result_summary(rig.first),
+        "camera_2": result_summary(rig.second),
+    }
+    if files:
+        out["camera_files"] = {"camera_1": files[0], "camera_2": files[1]}
+    return out
+
+
+def write_rig_json(rig, path: str | Path, files: tuple[str, str] | None = None) -> None:
+    Path(path).write_text(json.dumps(rig_summary(rig, files), indent=2), encoding="utf-8")
+
+
+def write_rig_yaml(rig, path: str | Path) -> None:
+    """OpenCV FileStorage YAML with both cameras and R, T, as cv2.stereoRectify and cv::fisheye take them."""
+    fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE)
+    try:
+        fs.writeComment(f"Written by Plumbline {__version__} by Calib.Tools, https://calib.tools")
+        fs.writeComment("R, T: x2 = R * x1 + T, mm. K1, D1 belong to camera 1; K2, D2 to camera 2.")
+        for n, cam in ((1, rig.first), (2, rig.second)):
+            fs.write(f"distortion_model_{n}", model_name(cam))
+            fs.write(f"image_width_{n}", int(cam.image_width))
+            fs.write(f"image_height_{n}", int(cam.image_height))
+            fs.write(f"K{n}", np.asarray(cam.camera_matrix, np.float64))
+            fs.write(f"D{n}", np.asarray(cam.distortion, np.float64).reshape(1, -1))
+        fs.write("R", np.asarray(rig.rotation, np.float64))
+        fs.write("T", np.asarray(rig.translation, np.float64).reshape(3, 1))
+        fs.write("rms_point", float(rig.rms_point))
+        fs.write("pairs_used", int(len(rig.pairs)))
     finally:
         fs.release()

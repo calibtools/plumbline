@@ -28,6 +28,7 @@ def write_report(
     path: str | Path,
     project_name: str = "Calibration",
     revision: int = 1,
+    kind: str = "Single camera",
 ) -> int:
     """Write the report. Returns the number of pages."""
     writer = QPdfWriter(str(path))
@@ -38,15 +39,17 @@ def write_report(
     writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
 
     rows = _image_rows(result, detections)
-    pages = 1 + max(1, -(-len(rows) // ROWS_PER_PAGE))
+    pages = 2 + max(1, -(-len(rows) // ROWS_PER_PAGE))
     p = QPainter(writer)
     try:
         # Map the 794 x 1123 layout onto whatever device size the writer reports.
         p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
-        _summary_page(p, result, detections, project_name, revision, 1, pages)
-        for n in range(pages - 1):
+        _summary_page(p, result, detections, project_name, revision, 1, pages, kind)
+        writer.newPage()
+        _maps_page(p, result, detections, project_name, 2, pages)
+        for n in range(pages - 2):
             writer.newPage()
-            _table_page(p, rows[n * ROWS_PER_PAGE : (n + 1) * ROWS_PER_PAGE], project_name, n + 2, pages)
+            _table_page(p, rows[n * ROWS_PER_PAGE : (n + 1) * ROWS_PER_PAGE], project_name, n + 3, pages)
     finally:
         p.end()
     return pages
@@ -124,13 +127,14 @@ def _image_rows(result: CalibrationResult, detections: list[Detection]):
 
 
 # -------------------------------------------------------------------- pages
-def _summary_page(p, r: CalibrationResult, detections, project_name, revision, page, pages) -> None:
+def _summary_page(p, r: CalibrationResult, detections, project_name, revision, page, pages,
+                  kind: str = "Single camera") -> None:
     _frame(p, page, pages, project_name)
     W = PAGE_W - 2 * M
     y = M + 48
 
     y += _text(p, M, y, W, project_name, T.mono(22, 600)) + 4
-    y += _text(p, M, y, W, f"Single camera  ·  {r.image_width} × {r.image_height} px  ·  "
+    y += _text(p, M, y, W, f"{kind}  ·  {r.image_width} × {r.image_height} px  ·  "
                f"{date.today().isoformat()}  \u00b7  Revision {revision}", T.sans(12), T.INK_MUTED) + 22
 
     # RMS block, with what went into it on the right.
@@ -153,11 +157,26 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
     _eyebrow(p, M, y, "Parameters")
     y += 16
     half = (W - 16) / 2
-    h_a = _kv_table(p, M, y, half, [("fx, px", f"{r.fx:.3f}"), ("fy, px", f"{r.fy:.3f}"),
-                                    ("cx, px", f"{r.cx:.3f}"), ("cy, px", f"{r.cy:.3f}")])
+    u = r.uncertainty
+
+    def pm(name: str, value: float, digits: int) -> str:
+        sd = u.std_of(name) if u is not None else None
+        return f"{value:.{digits}f}" if sd is None else f"{value:.{digits}f} ± {sd:.{digits}f}"
+
+    h_a = _kv_table(p, M, y, half, [("fx, px", pm("fx", r.fx, 3)), ("fy, px", pm("fy", r.fy, 3)),
+                                    ("cx, px", pm("cx", r.cx, 3)), ("cy, px", pm("cy", r.cy, 3))],
+                    cols=1 if u is not None else 2)
     h_b = _kv_table(p, M + half + 16, y, half,
-                    [(k, f"{v:.6f}") for k, v in zip(r.distortion_names, r.distortion)])
-    y += max(h_a, h_b) + 20
+                    [(k, pm(k, float(v), 6)) for k, v in zip(r.distortion_names, r.distortion)],
+                    cols=1 if u is not None else 2)
+    y += max(h_a, h_b) + 6
+    if u is not None:
+        y += _text(p, M, y, W,
+                   "± is one standard deviation, worked out from the scatter of the detected points "
+                   f"({u.noise_px:.3f} px per coordinate). It does not cover a board that is not flat or "
+                   "not the size entered, or a lens model that does not fit the lens.",
+                   T.sans(11), T.INK_MUTED, wrap=True)
+    y += 14
 
     # Target and method.
     _eyebrow(p, M, y, "Target and method")
@@ -189,20 +208,84 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
     y += _text(p, M, y, W, "px per image, RMS per point, in file order. Hollow bars are excluded images; "
                "a number above a bar means it runs off the scale.", T.sans(10), T.INK_MUTED) + 20
 
-    # Coverage and findings side by side.
-    _eyebrow(p, M, y, "Coverage")
-    fx0 = M + 300
-    _eyebrow(p, fx0, y, "Findings")
+    # Findings, full width. The maps they refer to are on the next page.
+    _eyebrow(p, M, y, "Findings")
     y += 16
     active = [d for i, d in enumerate(detections) if i in by_index]
-    grid, share = coverage_grid(active, r.image_width, r.image_height)
-    _coverage(p, QRectF(M, y, 256, 160), grid)
-    _text(p, M, y + 166, 280, f"{share * 100:.0f} % of the image is covered. Dark: many. Light: few. "
-          "Red outline: none.", T.sans(10), T.INK_MUTED, wrap=True)
-    fy = y
+    _grid, share = coverage_grid(active, r.image_width, r.image_height)
     for tag, text in findings(r, share):
-        _text(p, fx0, fy + 1, 50, tag, T.mono(10, 600), TAG_COLOR[tag])
-        fy += _text(p, fx0 + 52, fy, PAGE_W - M - fx0 - 52, text, T.sans(11), wrap=True) + 8
+        _text(p, M, y + 1, 50, tag, T.mono(10, 600), TAG_COLOR[tag])
+        y += _text(p, M + 56, y, W - 56, text, T.sans(11), wrap=True) + 7
+
+
+def _maps_page(p, r: CalibrationResult, detections, project_name, page, pages) -> None:
+    """Three maps of the image: where the points fell, how sure the result is there, what is left over."""
+    _frame(p, page, pages, project_name)
+    W = PAGE_W - 2 * M
+    y = M + 48
+    y += _text(p, M, y, W, "Across the image", T.mono(18, 600)) + 4
+    y += _text(p, M, y, W, f"Each map shows the whole image, {r.image_width} × {r.image_height} px, "
+               "divided into cells.", T.sans(12), T.INK_MUTED) + 22
+
+    gap = 24.0
+    mw = (W - gap) / 2
+    mh = min(mw * r.image_height / max(r.image_width, 1), 300.0)
+    mw_used = mh * r.image_width / max(r.image_height, 1)
+    x2 = M + mw + gap
+    used = {v.index for v in r.views}
+    grid, share = coverage_grid([d for i, d in enumerate(detections) if i in used], r.image_width, r.image_height)
+
+    # Row 1: coverage and uncertainty.
+    _eyebrow(p, M, y, "Coverage")
+    _eyebrow(p, x2, y, "Uncertainty")
+    y += 16
+    _coverage(p, QRectF(M, y, mw_used, mh), grid)
+    sd = r.projection.sd if r.projection is not None else None
+    _uncertainty_map(p, QRectF(x2, y, mw_used, mh), sd)
+    y += mh + 8
+    h1 = _text(p, M, y, mw, f"{share * 100:.0f} % of the image is covered by {r.target.point_word}. "
+               "Dark: many. Light: few. Red outline: none; the result is not checked there.",
+               T.sans(10), T.INK_MUTED, wrap=True)
+    if sd is None:
+        note = "Not worked out for this result."
+    else:
+        note = (f"Typical ±{np.nanmedian(sd):.2f} px, worst ±{np.nanmax(sd):.2f} px. How far a viewing direction "
+                "may land from where the result puts it, one standard deviation. Light: under 0.05 px. "
+                "Mid: under 0.2 px. Dark: under 0.5 px. Red: 0.5 px and more. From the scatter of the detected "
+                "points; a slight turn of the whole camera is not counted.")
+    h2 = _text(p, x2, y, mw, note, T.sans(10), T.INK_MUTED, wrap=True)
+    y += max(h1, h2) + 26
+
+    # Row 2: residuals, and how to read the page.
+    _eyebrow(p, M, y, "Residuals")
+    _eyebrow(p, x2, y, "How to read this page")
+    y += 16
+    lean = r.pattern.mean if r.pattern is not None else None
+    _residual_map(p, QRectF(M, y, mw_used, mh), lean)
+    ty = y
+    for head, body in (
+        ("Coverage", "Parts of the image without points are fitted by the lens model alone. "
+                     "Add views that put the target there."),
+        ("Uncertainty", "Where this map is dark or red, the same camera calibrated again from new images "
+                        "would give a visibly different answer. More views there bring it down."),
+        ("Residuals", "With a lens model that fits, the lines are short and point every which way. "
+                      "Lines that agree with their neighbours mean the model cannot follow the lens, "
+                      "or the board is not the shape entered."),
+    ):
+        ty += _text(p, x2, ty, mw, head, T.sans(11, 600)) + 2
+        ty += _text(p, x2, ty, mw, body, T.sans(11), wrap=True) + 10
+    y += mh + 8
+    if lean is None:
+        note = "Not worked out for this result."
+    else:
+        size = np.linalg.norm(lean, axis=2)
+        top = float(np.nanmax(size)) if np.isfinite(size).any() else 0.0
+        note = (f"Largest {top:.2f} px. What is left over after the fit, averaged over each cell: where the "
+                "points were found minus where the result puts them. The dot is the far end of each line; "
+                "lines are drawn enlarged. Red: 0.1 px and more.")
+        if r.pattern.has_pattern:
+            note += f" The pattern is {r.pattern.strength:.1f} times what noise alone would leave."
+    _text(p, M, y, mw, note, T.sans(10), T.INK_MUTED, wrap=True)
 
 
 def _table_page(p, rows, project_name, page, pages) -> None:
@@ -291,3 +374,61 @@ def _coverage(p, area: QRectF, grid: np.ndarray) -> None:
                 p.setPen(QPen(QColor(shade), 0.8))
                 p.setBrush(QColor(shade))
             p.drawRect(cell)
+
+
+def _map_border(p, area: QRectF, empty: str | None = None) -> None:
+    p.setPen(QPen(QColor(T.HAIRLINE), 0.8))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRect(area)
+    if empty:
+        _text(p, area.left(), area.center().y() - 8, area.width(), empty, T.sans(11), T.INK_MUTED,
+              Qt.AlignmentFlag.AlignHCenter)
+
+
+def _uncertainty_map(p, area: QRectF, sd: np.ndarray | None) -> None:
+    if sd is None:
+        _map_border(p, area, "No uncertainty for this result")
+        return
+    _map_border(p, area)   # cells the lens model does not reach stay empty; the frame shows where the image ends
+    rows, cols = sd.shape
+    cw, ch = area.width() / cols, area.height() / rows
+    for r in range(rows):
+        for c in range(cols):
+            v = float(sd[r, c])
+            if not np.isfinite(v):
+                continue  # outside what the lens model reaches
+            shade = T.HAIRLINE if v < 0.05 else T.LINE_STRONG if v < 0.2 else T.INK if v < 0.5 else T.RED_TEXT
+            p.setPen(QPen(QColor(shade), 0.8))
+            p.setBrush(QColor(shade))
+            p.drawRect(QRectF(area.left() + c * cw + 1, area.top() + r * ch + 1, cw - 2, ch - 2))
+
+
+def _residual_map(p, area: QRectF, lean: np.ndarray | None) -> None:
+    if lean is None:
+        _map_border(p, area, "No residual map for this result")
+        return
+    _map_border(p, area)
+    rows, cols = lean.shape[:2]
+    cw, ch = area.width() / cols, area.height() / rows
+    size = np.linalg.norm(lean, axis=2)
+    finite = size[np.isfinite(size)]
+    scale = float(np.percentile(finite, 85)) if finite.size else 0.0
+    reach = 1.6 * min(cw, ch)                      # same drawing rule as the map in the window
+    gain = min(cw, ch) / max(scale, 0.05)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    for r in range(rows):
+        for c in range(cols):
+            if not np.isfinite(size[r, c]):
+                continue
+            mid = QPointF(area.left() + (c + 0.5) * cw, area.top() + (r + 0.5) * ch)
+            dx, dy = (float(v) for v in lean[r, c] * gain)
+            length = float(np.hypot(dx, dy))
+            if length > reach:
+                dx, dy = dx * reach / length, dy * reach / length
+            strong = size[r, c] >= 0.1
+            colour = QColor(T.RED if strong else T.INK)
+            p.setPen(QPen(colour, 1.4 if strong else 1.0))
+            p.setBrush(colour)
+            p.drawLine(QPointF(mid.x() - dx / 2, mid.y() - dy / 2), QPointF(mid.x() + dx / 2, mid.y() + dy / 2))
+            p.drawEllipse(QPointF(mid.x() + dx / 2, mid.y() + dy / 2), 1.6, 1.6)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)

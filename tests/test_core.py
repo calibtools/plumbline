@@ -219,7 +219,7 @@ def test_excel_workbook_holds_the_same_numbers(tmp_path, charuco, charuco_set):
     path = tmp_path / "data.xlsx"
     write_xlsx(result, dets, path, "bench-cam", 2)
     wb = load_workbook(path)
-    assert wb.sheetnames == ["Summary", "Images", "Corners"]
+    assert wb.sheetnames == ["Summary", "Images", "Corners", "Board points"]
     summary = {row[0]: row[1] for row in wb["Summary"].iter_rows(min_row=2, values_only=True) if row[0]}
     assert summary["Project"] == "bench-cam" and summary["Revision"] == 2
     assert summary["fx, px"] == pytest.approx(result.fx)

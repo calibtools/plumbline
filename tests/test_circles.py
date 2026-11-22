@@ -61,7 +61,7 @@ def test_circle_grids_recover_the_camera(kind, camera):
         if det.usable:
             truth = synth.true_corners(target, camera, r, t)[det.ids]
             # The centre of a tilted circle's image is not exactly the image of its centre;
-            # that bias is not corrected yet and stays below a quarter of a pixel here.
+            # as detected, the centres are off by up to a quarter of a pixel here.
             assert np.max(np.linalg.norm(truth - det.corners, axis=1)) < 0.35
 
     result = calibrate(dets, target)
@@ -72,6 +72,34 @@ def test_circle_grids_recover_the_camera(kind, camera):
                                     camera.width, camera.height)
     assert mean < 0.3
     assert any(text.startswith("Circles cover") for _tag, text in findings(result, 0.8))
+
+    # With the diameter known the centres are corrected, and the result moves onto the true camera.
+    from dataclasses import replace
+    assert result.circle_shift_px == pytest.approx(0.085, abs=0.02)
+    assert abs(result.fx - 1500) < 0.15
+    as_detected = calibrate(dets, replace(target, marker_mm=None))
+    assert as_detected.circle_shift_px is None and abs(as_detected.fx - 1500) > 0.15
+    assert any("corrected for perspective" in text for _tag, text in findings(result, 0.8))
+    assert any("Circle diameter not entered" in text for _tag, text in findings(as_detected, 0.8))
+
+
+@pytest.mark.parametrize("wide", [False, True])
+def test_centre_correction_removes_the_bias(wide, camera, fisheye_camera):
+    """Detected centres minus the computed shift land on the true centres."""
+    from plumbline.core.circles import centre_bias
+
+    cam = fisheye_camera if wide else camera
+    target = Target(CIRCLES, 12, 7, 22.0, 14.0)
+    poses, _images, dets = _views(target, cam, 12)
+    before, after = [], []
+    for det, (r, t) in zip(dets, poses):
+        if det.usable:
+            truth = synth.true_corners(target, cam, r, t)[det.ids]
+            shift = centre_bias(target.object_points()[det.ids], 7.0, r, t, cam.K, cam.dist, wide)
+            before.append(np.linalg.norm(det.corners - truth, axis=1))
+            after.append(np.linalg.norm(det.corners - shift - truth, axis=1))
+    before, after = np.concatenate(before), np.concatenate(after)
+    assert before.mean() > 0.06 and after.mean() < 0.02 and after.max() < 0.08
 
 
 def test_a_grid_that_is_partly_outside_says_so(asymmetric_set):
@@ -90,9 +118,10 @@ def test_stock_circle_grids_are_listed():
     assert {CIRCLES, ASYMMETRIC_CIRCLES} <= kinds
     board = find_board("CT-CIR-P-300X200-ASY")
     assert board is not None and board.target.opencv_size == (6, 7) and board.target.square_mm == 22
-    # Typed in by hand without the diameter, it is still that board.
-    assert same_geometry(board.target, Target(ASYMMETRIC_CIRCLES, 12, 7, 22.0))
-    assert not same_geometry(board.target, Target(ASYMMETRIC_CIRCLES, 12, 7, 23.0))
+    # The diameter is part of the board: it decides the perspective correction.
+    assert same_geometry(board.target, Target(ASYMMETRIC_CIRCLES, 12, 7, 22.0, board.target.marker_mm))
+    assert not same_geometry(board.target, Target(ASYMMETRIC_CIRCLES, 12, 7, 22.0))
+    assert not same_geometry(board.target, Target(ASYMMETRIC_CIRCLES, 12, 7, 23.0, board.target.marker_mm))
 
 
 def test_circle_grid_in_the_window(tmp_path, asymmetric_set):
@@ -120,7 +149,9 @@ def test_circle_grid_in_the_window(tmp_path, asymmetric_set):
     assert bench.project.target.part_number == "CT-CIR-P-300X200-ASY"
     assert (bench.sx.value(), bench.sy.value(), bench.square.value()) == (12, 7, 22.0)
     assert bench.sx_label.text() == "Columns" and bench.square_label.text() == "Lattice spacing"
-    assert bench.marker.isHidden() and bench.dictionary.isHidden() and bench.first_id.isHidden()
+    assert bench.dictionary.isHidden() and bench.first_id.isHidden()
+    assert not bench.marker.isHidden() and bench.marker_label.text() == "Circle diameter"
+    assert bench.marker.value() == bench.project.target.marker_mm == 14.0
     assert "42 circles, 7 rows of 6" in bench.target_hint.text()
     assert bench.table.horizontalHeaderItem(1).text() == "Circles"
 

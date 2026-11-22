@@ -32,8 +32,11 @@ def export_stem(name: str, revision: int) -> str:
     return stem if revision <= 1 else f"{stem}-r{revision}"
 
 
-def export_files(name: str, revision: int) -> dict[str, str]:
+def export_files(name: str, revision: int, camera: int | None = None) -> dict[str, str]:
+    """File names of one export. With two cameras, `camera` (1 or 2) gives that camera's own set."""
     stem = export_stem(name, revision)
+    if camera is not None:
+        stem = f"{stem}-cam{camera}"
     return {
         "report": f"{stem}-report.pdf",
         "opencv_yaml": f"{stem}-camera.yml",
@@ -45,6 +48,21 @@ def export_files(name: str, revision: int) -> dict[str, str]:
         "example": f"{stem}-example.py",
         "project": f"{safe_name(name)}.plumbline",
     }
+
+
+def rig_files(name: str, revision: int) -> dict[str, str]:
+    """The files that say how two cameras sit to each other."""
+    stem = export_stem(name, revision)
+    return {"rig_json": f"{stem}-cameras.json", "rig_yaml": f"{stem}-cameras.yml"}
+
+
+def rig_signature(rig) -> str:
+    """Fingerprint of a two-camera result."""
+    h = hashlib.sha256()
+    h.update((result_signature(rig.first) + result_signature(rig.second)).encode())
+    h.update(np.round(rig.rotation, 9).tobytes())
+    h.update(np.round(rig.translation, 6).tobytes())
+    return h.hexdigest()[:16]
 
 
 def result_signature(result) -> str:
