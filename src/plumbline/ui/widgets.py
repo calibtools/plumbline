@@ -313,6 +313,7 @@ class ImageView(QWidget):
         self.setMinimumSize(320, 240)
         self._pix: QPixmap | None = None
         self._corners = np.zeros((0, 2))
+        self._rings = np.zeros((0, 2))
         self._residuals: np.ndarray | None = None
         self._message = ""
         self._caption = ""
@@ -357,6 +358,12 @@ class ImageView(QWidget):
         img = QImage(np.ascontiguousarray(gray).data, w, h, w, QImage.Format.Format_Grayscale8).copy()
         self._pix = QPixmap.fromImage(img)
         self._corners, self._residuals, self._caption = corners, residuals, caption
+        self._rings = np.zeros((0, 2))
+        self.update()
+
+    def set_rings(self, points: np.ndarray):
+        """Points to circle in the current image, in image pixels: board points that look misplaced."""
+        self._rings = np.asarray(points, np.float64).reshape(-1, 2)
         self.update()
 
     def paintEvent(self, _e):
@@ -388,6 +395,13 @@ class ImageView(QWidget):
                 dx, dy = self._residuals[k]
                 p.setPen(QPen(QColor(T.RED), 1.4))
                 p.drawLine(pt, QPointF(pt.x() + dx * RESIDUAL_GAIN * s, pt.y() + dy * RESIDUAL_GAIN * s))
+        for cx, cy in self._rings:
+            pt = QPointF(x0 + (cx + 0.5) * s, y0 + (cy + 0.5) * s)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor("#FFFFFF"), 4))
+            p.drawEllipse(pt, 13, 13)
+            p.setPen(QPen(QColor(T.RED), 2))
+            p.drawEllipse(pt, 13, 13)
         p.setPen(QColor(T.INK_MUTED))
         p.setFont(T.mono(12))
         room = self.corrected_btn.width() + 16 if self._allowed else 0

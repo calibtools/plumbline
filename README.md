@@ -12,6 +12,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - OpenCV fisheye lens model (k1 to k4) for wide lenses
 - Corrected view: any image with the lens distortion of the result removed
 - Uncertainty: one standard deviation for every fitted parameter, and their correlations, in the result panel, the report, JSON and Excel
+- Board check: a point of the board that is misplaced (damage, a board that is not flat) is found and ringed in the images
 - Uncertainty map: how well the result is pinned down across the image, next to the coverage map
 - Reprojection error per image, corner coverage map, excluding images and solving again
 - Export: OpenCV YAML and XML, JSON, ROS `camera_info`, Excel workbook, PDF report; choose which files to write
@@ -36,7 +37,9 @@ AprilGrid and ArUco grid: the corners of a tag or marker are L-shaped, and blur 
 
 Uncertainty: the standard deviations are checked against OpenCV's own figures and against the spread of repeated calibrations with fresh noise. The map across the image is checked the same way, cell by cell. Before the map is drawn, the part of the uncertainty that a slight turn of the whole camera would explain is taken out, as mrcal does when it compares two models; a shift of the image centre alone is not a change of the lens. They describe random noise in the detected points only. In the rendered tests the true focal length can lie two to three standard deviations away, because detection also has small errors that repeat from image to image.
 
-Circle grids: the centre of a tilted circle's image is not exactly the image of its centre. Plumbline does not correct for this yet; in the tests the effect stays below a quarter of a pixel.
+Circle grids: the centre of a tilted circle's image is not exactly the image of its centre. With the circle diameter known, Plumbline computes that shift from a first result, takes it off and solves again. In the tests this brings the mean centre error from about 0.09 px (0.25 px with the fisheye lens) down to about 0.01 px.
+
+Board points: every point of the board is followed across all images. A point that is off the same way in every image, as seen from the board, is reported with its place on the board and the size of the offset; the Excel export lists every point.
 
 Some tools count x and y separately; that figure is smaller by a factor of √2. Exports carry both.
 

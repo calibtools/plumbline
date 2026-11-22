@@ -326,6 +326,8 @@ class Workbench(QWidget):
             s.setDecimals(3)
             s.setSuffix(" mm")
             s.setValue(val)
+        self.marker.setMinimum(0.0)  # 0 stands for "not known" where the field is optional (circle diameter)
+        self.marker.setSpecialValueText("not set")
         self.first_id = QSpinBox()
         self.first_id.setRange(0, 9999)
         self.first_id.setToolTip("Boards in a set often continue the numbering: board 2 starts where board 1 ends.")
@@ -502,6 +504,8 @@ class Workbench(QWidget):
         self.sx.setValue(t.squares_x)
         self.sy.setValue(t.squares_y)
         self.square.setValue(t.square_mm)
+        if t.is_circles:
+            self.marker.setValue(t.marker_mm or 0.0)
         if t.kind in (CHARUCO, *MARKER_GRIDS):
             self.marker.setValue(t.marker_mm)
             self.dictionary.setCurrentText(t.dictionary)
@@ -522,6 +526,9 @@ class Workbench(QWidget):
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
                                 self.marker.value(), self.dictionary.currentText(),
                                 first_marker_id=self.first_id.value())
+            elif kind in (CIRCLES, ASYMMETRIC_CIRCLES):
+                target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
+                                self.marker.value() or None)
             else:
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value())
             # The part number stays only while the fields still describe that board.
@@ -552,8 +559,24 @@ class Workbench(QWidget):
                 self.dictionary.blockSignals(True)
                 self.dictionary.setCurrentText("DICT_APRILTAG_36h11" if kind == APRILGRID else "DICT_5X5_250")
                 self.dictionary.blockSignals(False)
+        circles = kind in (CIRCLES, ASYMMETRIC_CIRCLES)
+        if kind != self._last_kind:
+            # The same field holds a marker size, a gap or a circle diameter; do not carry one over as another.
+            was_circles = self._last_kind in (CIRCLES, ASYMMETRIC_CIRCLES)
+            fresh = None
+            if circles and not was_circles:
+                fresh = 0.0
+            elif kind == CHARUCO and self._last_kind != CHARUCO:
+                fresh = round(0.75 * self.square.value(), 3)
+            elif kind in MARKER_GRIDS and self._last_kind not in MARKER_GRIDS:
+                fresh = round(0.3 * self.square.value(), 3)
+            if fresh is not None:
+                self.marker.blockSignals(True)
+                self.marker.setValue(fresh)
+                self.marker.blockSignals(False)
         self._last_kind = kind
-        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap"}.get(kind, "Marker size"))
+        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap", CIRCLES: "Circle diameter",
+                                   ASYMMETRIC_CIRCLES: "Circle diameter"}.get(kind, "Marker size"))
         self.first_id_label.setText("First tag ID" if kind == APRILGRID else "First marker ID")
         if kind == ARUCO_GRID:
             names = ("Markers across", "Markers down", "Marker size")
@@ -567,20 +590,23 @@ class Workbench(QWidget):
                     "Part of the grid in the image is enough.")
         elif kind == CIRCLES:
             names = ("Circles across", "Circles down", "Spacing")
-            note = "For any other board: count the circles, and measure from the centre of one to the centre of the next."
+            note = ("For any other board: count the circles, and measure from the centre of one to the centre "
+                    "of the next. With the diameter entered, the centres are corrected for perspective.")
         elif kind == ASYMMETRIC_CIRCLES:
             names = ("Columns", "Rows", "Lattice spacing")
             note = ("Columns and rows count the positions of the square lattice the circles sit on; "
-                    "every other position holds a circle. The whole grid must be in every image.")
+                    "every other position holds a circle. The whole grid must be in every image. "
+                    "With the diameter entered, the centres are corrected for perspective.")
         else:
             names = ("Squares across", "Squares down", "Square size")
             note = "For any other board: count squares, not inner corners, and measure one square."
         for wdg, text in zip((self.sx_label, self.sy_label, self.square_label), names):
             wdg.setText(text)
         self.target_note.setText(note)
-        for wdg in (self.marker, self.dictionary, self.marker_label, self.dict_label,
-                    self.first_id, self.first_id_label):
+        for wdg in (self.dictionary, self.dict_label, self.first_id, self.first_id_label):
             wdg.setVisible(tags)
+        for wdg in (self.marker, self.marker_label):
+            wdg.setVisible(tags or circles)
         self.legacy.setVisible(charuco)
         target = self.current_target()
         board = find_board(target.part_number) if target is not None else None
@@ -875,6 +901,12 @@ class Workbench(QWidget):
             residuals = None
             caption = caption.replace(f" · residuals ×{RESIDUAL_GAIN}", "") + " · corrected view"
         self.view.set_image(gray, corners, residuals, caption)
+        # Ring the board points that are off the same way in every image, where this image shows them.
+        if r is not None and r.points is not None and det is not None and len(corners):
+            wanted = {int(r.points.ids[i]) for i in r.points.suspects()}
+            if wanted:
+                self.view.set_rings(np.asarray(corners)[[k for k, pid in enumerate(det.ids.tolist())
+                                                         if pid in wanted]])
         self._update_toggle()
         self._refresh_chart()
 
