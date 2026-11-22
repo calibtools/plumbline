@@ -67,6 +67,16 @@ def rig_signature(rig) -> str:
     return h.hexdigest()[:16]
 
 
+def group_signature(group) -> str:
+    """Fingerprint of a result with three or more cameras."""
+    h = hashlib.sha256()
+    h.update("".join(result_signature(c) for c in group.cameras).encode())
+    for p in group.placed:
+        h.update(np.round(p.rotation, 9).tobytes())
+        h.update(np.round(p.translation, 6).tobytes())
+    return h.hexdigest()[:16]
+
+
 def result_signature(result) -> str:
     """Fingerprint of a result. Two exports with the same fingerprint are the same revision."""
     h = hashlib.sha256()

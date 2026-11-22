@@ -12,7 +12,7 @@ from PySide6.QtSvg import QSvgRenderer
 from .. import __version__
 from ..core.calibrate import CalibrationResult, coverage_grid
 from ..core.detect import Detection
-from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, model_sentence, rig_findings
+from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, group_findings, model_sentence, rig_findings
 from . import theme as T
 from .widgets import _nice_ticks
 
@@ -88,6 +88,169 @@ def write_rig_report(rig, first: list[Detection], second: list[Detection], path:
     finally:
         p.end()
     return pages
+
+
+def write_group_report(group, detections: list[list[Detection]], path: str | Path,
+                       project_name: str = "Calibration", revision: int = 1,
+                       camera_reports: list[str] | None = None) -> int:
+    """Report on three or more cameras together: where each sits, and every set. Returns the number of pages."""
+    writer = QPdfWriter(str(path))
+    writer.setResolution(96)
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
+    writer.setTitle(f"{project_name} calibration report for {len(group.cameras)} cameras, revision {revision}")
+    writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
+    used = {q.index: q for q in group.sets}
+    rows = []
+    for i in range(max(len(d) for d in detections)):
+        q = used.get(i)
+        seen = [c for c, d in enumerate(detections) if i < len(d) and d[i].usable]
+        if q is not None:
+            status = "used"
+        elif any(i in cam.excluded for cam in group.cameras):
+            status = "excluded"
+        else:
+            status = "alone"
+        rows.append((i + 1, q.cameras if q else tuple(seen), q.points if q else None, q.rms_point if q else None, status))
+    pages = 2 + max(1, -(-len(rows) // ROWS_PER_PAGE))
+    p = QPainter(writer)
+    try:
+        p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
+        _group_page(p, group, rows, project_name, revision, 1, pages, camera_reports)
+        writer.newPage()
+        _group_detail_page(p, group, rows, project_name, 2, pages)
+        for n in range(pages - 2):
+            writer.newPage()
+            _sets_page(p, rows[n * ROWS_PER_PAGE: (n + 1) * ROWS_PER_PAGE], project_name, n + 3, pages)
+    finally:
+        p.end()
+    return pages
+
+
+def _ruled_table(p, y, cols, rows, row_h=23.0) -> float:
+    """A table over the page width: a tinted head, one ruled line per row. Returns the height used."""
+    W = PAGE_W - 2 * M
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(T.RED_TINT))
+    p.drawRect(QRectF(M, y, W, row_h))
+
+    def cell(ci, text, yy, font, color):
+        _, x0, share, align = cols[ci]
+        x = M + x0 * W + (10 if align == Qt.AlignmentFlag.AlignLeft else 0)
+        _text(p, x, yy + 6, share * W - 10, text, font, color, align=align)
+
+    for ci, (title, _x, _w, _a) in enumerate(cols):
+        cell(ci, title, y, T.mono(10, 500), T.RED_TEXT)
+    top = y
+    y += row_h
+    for cells, color in rows:
+        for ci, text in enumerate(cells):
+            cell(ci, text, y, T.mono(11), color)
+        y += row_h
+        _line(p, M, y, M + W, y)
+    return y - top
+
+
+def _group_page(p, group, rows, project_name, revision, page, pages, camera_reports) -> None:
+    _frame(p, page, pages, project_name)
+    W = PAGE_W - 2 * M
+    count = len(group.cameras)
+    y = M + 48
+    y += _text(p, M, y, W, project_name, T.mono(22, 600)) + 4
+    y += _text(p, M, y, W, f"{count} cameras  ·  {date.today().isoformat()}  \u00b7  Revision {revision}",
+               T.sans(12), T.INK_MUTED) + 22
+
+    _eyebrow(p, M, y, "RMS reprojection error, all cameras")
+    _eyebrow(p, M + W / 2 + 12, y, "Sets")
+    y += 16
+    h1 = _text(p, M, y, W / 2, f"{group.rms_point:.3f} px", T.mono(32, 600))
+    points = sum(q.points for q in group.sets)
+    _text(p, M + W / 2 + 12, y + 2, W / 2 - 12, f"{len(group.sets)} of {len(rows)} used  ·  {points:,} points",
+          T.mono(13, 600))
+    _text(p, M + W / 2 + 12, y + 22, W / 2 - 12,
+          "A set is the images taken at the same moment, one per camera. It is used when at least two of them "
+          "show the target.", T.sans(11), T.INK_MUTED, wrap=True)
+    y += h1 + 2
+    y += _text(p, M, y, W / 2 - 12, "Per point, over all images of every set that is used.",
+               T.sans(11), T.INK_MUTED, wrap=True) + 26
+
+    _eyebrow(p, M, y, "Where each camera sits, seen from camera 1")
+    y += 16
+    right = Qt.AlignmentFlag.AlignRight
+    cols = [("Camera", 0.00, 0.12, Qt.AlignmentFlag.AlignLeft), ("Apart, mm", 0.12, 0.18, right),
+            ("Turned, °", 0.30, 0.18, right), ("X (right), mm", 0.48, 0.17, right),
+            ("Y (down), mm", 0.65, 0.17, right), ("Z (forward), mm", 0.82, 0.18, right)]
+
+    def pm(value, sd, digits=2):
+        if not sd == sd:
+            return f"{value:.{digits}f}"
+        return f"{value:.{digits}f} ± {sd:.{digits if round(sd, digits) > 0 else digits + 1}f}"
+
+    body = []
+    for q in group.placed:
+        x, yy, z = q.position
+        body.append(((f"{q.camera + 1}", pm(q.apart_mm, q.apart_std_mm), pm(q.turned_deg, q.turned_std_deg, 3),
+                      pm(x, q.position_std[0]), pm(yy, q.position_std[1]), pm(z, q.position_std[2])), T.INK))
+    y += _ruled_table(p, y, cols, body) + 8
+    y += _text(p, M, y, W,
+               "X, Y and Z are where a camera sits in camera 1's own directions: to its right, downwards, and the "
+               "way it looks. ± is one standard deviation, from the scatter of the detected points and from how "
+               "well each camera's own parameters are known. It does not cover a target that is not flat or not "
+               "the size entered, or cameras that were not triggered together.",
+               T.sans(11), T.INK_MUTED, wrap=True) + 20
+
+    _eyebrow(p, M, y, "The cameras")
+    y += 16
+    for n, cam in enumerate(group.cameras, 1):
+        _text(p, M, y, 70, f"Camera {n}", T.sans(11, 600))
+        line = (f"{cam.image_width} × {cam.image_height} px  ·  fx {cam.fx:.2f}  fy {cam.fy:.2f}  cx {cam.cx:.2f}  "
+                f"cy {cam.cy:.2f}  ·  {cam.rms_point:.3f} px alone")
+        y += _text(p, M + 76, y, W - 76, line, T.mono(11)) + 2
+        more = model_sentence(cam) + (f"  Its own report: {camera_reports[n - 1]}" if camera_reports else "")
+        y += _text(p, M + 76, y, W - 76, more, T.sans(10), T.INK_MUTED, wrap=True) + 6
+
+
+def _group_detail_page(p, group, rows, project_name, page, pages) -> None:
+    _frame(p, page, pages, project_name)
+    W = PAGE_W - 2 * M
+    y = M + 48
+    _eyebrow(p, M, y, "Error per set")
+    y += 16
+    _error_chart(p, QRectF(M, y, W, 130), [(r[3], r[4] == "excluded") for r in rows])
+    y += 130 + 4
+    y += _text(p, M, y, W, "px per set, RMS per point over all its images, in set order. A set without a bar "
+               "takes no part.", T.sans(10), T.INK_MUTED) + 20
+
+    _eyebrow(p, M, y, "Findings")
+    y += 16
+    for tag, text in group_findings(group):
+        _text(p, M, y + 1, 50, tag, T.mono(10, 600), TAG_COLOR[tag])
+        y += _text(p, M + 56, y, W - 56, text, T.sans(11), wrap=True) + 7
+    y += 16
+
+    _eyebrow(p, M, y, "As in the files")
+    y += 14
+    y += _text(p, M, y, W, "A point x1 in camera 1 coordinates is Rn · x1 + Tn in camera n coordinates.",
+               T.sans(10), T.INK_MUTED) + 6
+    for q in group.placed:
+        n = q.camera + 1
+        y += _kv_table(p, M, y, W, [(f"R{n}, row {i + 1}", "  ".join(f"{v: .6f}" for v in q.rotation[i])) for i in range(3)]
+                       + [(f"T{n}, mm", "  ".join(f"{v: .3f}" for v in q.translation))], cols=2, row_h=20.0) + 8
+
+
+def _sets_page(p, rows, project_name, page, pages) -> None:
+    _frame(p, page, pages, project_name)
+    y = M + 48
+    _eyebrow(p, M, y, "Sets")
+    y += 18
+    right = Qt.AlignmentFlag.AlignRight
+    cols = [("Set", 0.00, 0.10, Qt.AlignmentFlag.AlignLeft), ("Cameras with the target", 0.10, 0.40, Qt.AlignmentFlag.AlignLeft),
+            ("Points", 0.50, 0.14, right), ("RMS, px", 0.64, 0.14, right), ("Status", 0.84, 0.16, Qt.AlignmentFlag.AlignLeft)]
+    body = []
+    for number, cams, points, rms, status in rows:
+        body.append(((f"{number:02d}", "  ".join(str(c + 1) for c in cams) or "–", str(points) if points is not None else "–",
+                      f"{rms:.3f}" if rms is not None else "–", status), T.INK if status == "used" else T.RED_TEXT))
+    _ruled_table(p, y, cols, body)
 
 
 def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports) -> None:

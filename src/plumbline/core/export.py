@@ -239,3 +239,49 @@ def write_rig_yaml(rig, path: str | Path) -> None:
         fs.write("pairs_used", int(len(rig.pairs)))
     finally:
         fs.release()
+
+
+def group_summary(group, files: list[str] | None = None) -> dict:
+    """Where each camera sits relative to camera 1, with every camera's own parameters alongside."""
+    out = {
+        "generator": f"Plumbline {__version__} by Calib.Tools, https://calib.tools",
+        "convention": "x = rotation @ x1 + translation_mm: a point in camera 1 coordinates, in that camera's "
+                      "coordinates. Camera axes as in OpenCV: x to the right, y down, z the way the camera looks.",
+        "camera_count": len(group.cameras),
+        **group.to_dict(),
+        "std_note": "One standard deviation, from the scatter of the detected points and from how well each "
+                    "camera's own parameters are known.",
+        "sets": [{"set": s.index + 1, "cameras": [c + 1 for c in s.cameras], "rms_point": s.rms_point,
+                  "points": s.points} for s in group.sets],
+    }
+    for c, cam in enumerate(group.cameras):
+        out[f"camera_{c + 1}"] = result_summary(cam)
+    if files:
+        out["camera_files"] = {f"camera_{c + 1}": f for c, f in enumerate(files)}
+    return out
+
+
+def write_group_json(group, path: str | Path, files: list[str] | None = None) -> None:
+    Path(path).write_text(json.dumps(group_summary(group, files), indent=2), encoding="utf-8")
+
+
+def write_group_yaml(group, path: str | Path) -> None:
+    """OpenCV FileStorage YAML with every camera and, for cameras 2 and up, R and T from camera 1."""
+    fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE)
+    try:
+        fs.writeComment(f"Written by Plumbline {__version__} by Calib.Tools, https://calib.tools")
+        fs.writeComment("Rn, Tn: xn = Rn * x1 + Tn, mm. Kn, Dn belong to camera n.")
+        fs.write("camera_count", int(len(group.cameras)))
+        for n, cam in enumerate(group.cameras, 1):
+            fs.write(f"distortion_model_{n}", model_name(cam))
+            fs.write(f"image_width_{n}", int(cam.image_width))
+            fs.write(f"image_height_{n}", int(cam.image_height))
+            fs.write(f"K{n}", np.asarray(cam.camera_matrix, np.float64))
+            fs.write(f"D{n}", np.asarray(cam.distortion, np.float64).reshape(1, -1))
+        for p in group.placed:
+            fs.write(f"R{p.camera + 1}", np.asarray(p.rotation, np.float64))
+            fs.write(f"T{p.camera + 1}", np.asarray(p.translation, np.float64).reshape(3, 1))
+        fs.write("rms_point", float(group.rms_point))
+        fs.write("sets_used", int(len(group.sets)))
+    finally:
+        fs.release()

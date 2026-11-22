@@ -1,10 +1,11 @@
-"""Images of two cameras handed over together: tell them apart and pair them by their file names.
+"""Images of two or more cameras handed over together: tell them apart and pair them by their file names.
 
 Typical sets: `left_001.png` / `right_001.png`, `cam1-07.png` / `cam2-07.png`,
 `0007_0.png` / `0007_1.png`, or two folders `left/` and `right/` with the same
 file names inside. The rule does not know these words: it looks for the one part
-of the name (or the folder) that takes exactly two values, and whose removal
-leaves names that match up one to one.
+of the name (or the folder) that takes as many values as there are cameras (two
+to eight), and whose removal leaves names that match up one to one. With three
+cameras `cam1-07.png`, `cam2-07.png` and `cam3-07.png` are one set.
 """
 from __future__ import annotations
 
@@ -13,12 +14,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+MOST_CAMERAS = 8
+
+
 @dataclass
 class Split:
-    first: list[str]          # camera 1, in pair order
-    second: list[str]         # camera 2, same order: second[i] belongs with first[i]
-    labels: tuple[str, str]   # what told the cameras apart, e.g. ("left", "right")
-    alone: list[str]          # images whose partner is missing; they are in neither list
+    cameras: list[list[str]]  # one list per camera, all in set order: cameras[c][i] belongs with cameras[0][i]
+    labels: tuple[str, ...]   # what told the cameras apart, e.g. ("left", "right")
+    alone: list[str]          # images of sets that are not complete; they are in none of the lists
+
+    @property
+    def first(self) -> list[str]:
+        return self.cameras[0]
+
+    @property
+    def second(self) -> list[str]:
+        return self.cameras[1]
 
 
 def _parts(path: str) -> list[str]:
@@ -35,7 +46,7 @@ def natural(pieces) -> list:
 
 
 def split_by_camera(paths: list[str], least: int = 3) -> Split | None:
-    """Split a set of image paths into two cameras, or None if the names do not say so clearly."""
+    """Split a set of image paths into two or more cameras, or None if the names do not say so clearly."""
     if len(paths) < 2 * least:
         return None
     parts = {p: _parts(p) for p in paths}
@@ -45,7 +56,7 @@ def split_by_camera(paths: list[str], least: int = 3) -> Split | None:
     best = None
     for at in range(lengths.pop()):
         values = sorted({v[at] for v in parts.values()})
-        if len(values) != 2:
+        if not 2 <= len(values) <= MOST_CAMERAS:
             continue
         groups: dict[tuple, dict[str, str]] = {}
         clash = False
@@ -58,14 +69,15 @@ def split_by_camera(paths: list[str], least: int = 3) -> Split | None:
             side[v[at]] = p
         if clash:
             continue
-        pairs = sorted(((k, g) for k, g in groups.items() if len(g) == 2), key=lambda kg: natural(kg[0]))
-        alone = sorted(p for g in groups.values() if len(g) == 1 for p in g.values())
-        # Most images must have a partner; a part that merely happens to take two values does not pass this.
-        if len(pairs) < least or len(alone) > len(pairs) // 4:
+        pairs = sorted(((k, g) for k, g in groups.items() if len(g) == len(values)), key=lambda kg: natural(kg[0]))
+        alone = sorted(p for g in groups.values() if len(g) < len(values) for p in g.values())
+        # Most images must be in a complete set; a part that merely happens to take few values does not pass this.
+        if len(pairs) < least or len(groups) - len(pairs) > len(pairs) // 4:
             continue
+        # The same names can read two ways (3 cameras x 8 sets, or 8 cameras x 3 sets): more sets is the likelier one.
         if best is None or len(pairs) > len(best[0]):
             best = (pairs, alone, values)
     if best is None:
         return None
-    pairs, alone, (a, b) = best
-    return Split([g[a] for _k, g in pairs], [g[b] for _k, g in pairs], (a, b), alone)
+    pairs, alone, values = best
+    return Split([[g[v] for _k, g in pairs] for v in values], tuple(values), alone)

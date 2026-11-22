@@ -184,3 +184,45 @@ def rig_findings(rig) -> list[tuple[str, str]]:
         out.append((NOTE, f"{k} pair{' takes' if k == 1 else 's take'} no part in the position of camera 2: one of "
                           "the two images has no usable detection, or the pair was excluded."))
     return out
+
+
+def group_findings(group) -> list[tuple[str, str]]:
+    """What to know about how three or more cameras sit to each other, before each camera's own findings."""
+    out = []
+    n = len(group.sets)
+    errors = sorted(s.rms_point for s in group.sets)
+    middle = errors[n // 2]
+    thin = [p for p in group.placed if p.sets < 10]
+    if thin:
+        names = ", ".join(f"camera {p.camera + 1} ({p.sets})" for p in thin)
+        out.append((CHECK, f"Few sets show the target in {names} and in another camera. With 15 or more, from "
+                           "different angles and distances, its position is pinned down much better."))
+    else:
+        out.append((PASS, f"{n} sets show the target in two or more cameras."))
+    worst = max(group.sets, key=lambda s: s.rms_point)
+    if n >= 4 and worst.rms_point > 3 * middle and worst.rms_point > 0.3:
+        out.append((CHECK, f"Set {worst.index + 1:02d} fits much worse than the others ({worst.rms_point:.2f} px "
+                           f"against a typical {middle:.2f} px). The target or a camera may have moved between "
+                           "the exposures. Try the result without this set."))
+    for p in group.placed:
+        if not (p.apart_mm > 0 and p.apart_std_mm == p.apart_std_mm):
+            continue
+        share = p.apart_std_mm / p.apart_mm
+        text = (f"Camera {p.camera + 1} is {p.apart_mm:.2f} mm from camera 1, ±{p.apart_std_mm:.2f} mm "
+                f"({share * 100:.2f} %), angle ±{p.turned_std_deg:.3f}°, one standard deviation.")
+        if share > 0.005:
+            out.append((CHECK, text + " Add sets with the target close to both cameras and tilted."))
+        else:
+            out.append((NOTE, text))
+    for p in group.placed:
+        if p.through != 0:
+            out.append((NOTE, f"Camera {p.camera + 1} was first placed through camera {p.through + 1}: too few sets "
+                              "show the target in it and in camera 1."))
+    if all(c.options.release_board for c in group.cameras):
+        out.append((NOTE, "The shape of the board was estimated by each camera on its own and the mean was used "
+                          "for all. How well that shape is known is not part of the ± values."))
+    if group.unused:
+        k = len(group.unused)
+        out.append((NOTE, f"{k} set{' takes' if k == 1 else 's take'} no part in where the cameras sit: fewer than "
+                          "two images have a usable detection, or the set was excluded."))
+    return out

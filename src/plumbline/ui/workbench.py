@@ -21,12 +21,13 @@ from ..core.calibrate import (
     CalibrationError, CalibrationResult, ModelOptions, calibrate, coverage_grid, suggest_exclusions,
 )
 from ..core.detect import Detection, detect_file, read_gray
-from ..core.naming import export_files, result_signature, rig_files, rig_signature, safe_name
+from ..core.naming import export_files, group_signature, result_signature, rig_files, rig_signature, safe_name
 from ..core.export_code import write_example, write_maps, write_rig_example
 from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
-from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, rig_findings
-from ..core.pairing import natural, split_by_camera
+from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, group_findings, rig_findings
+from ..core.group import GroupResult, calibrate_group
+from ..core.pairing import MOST_CAMERAS, natural, split_by_camera
 from ..core.project import SUFFIX, Project
 from ..core.rectify import write_rectify_maps
 from ..core.rig import RigResult, calibrate_pair
@@ -35,7 +36,7 @@ from ..core.targets import (
 )
 from . import theme as T
 from .export_dialog import ExportDialog
-from .report import write_report, write_rig_report
+from .report import write_report, write_rig_report, write_group_report
 from .widgets import (
     RESIDUAL_GAIN, CoverageMap, ErrorChart, ImageView, LinkLabel, SvgMark, Worker, button, frame,
     label, open_site, rule,
@@ -102,6 +103,8 @@ class Workbench(QWidget):
         self.setAcceptDrops(True)
         self.project = Project()
         self.rig: RigResult | None = None       # two cameras: both results and how the cameras sit to each other
+        self.group: GroupResult | None = None   # three or more cameras: every result and where each camera sits
+        self._other = 1                         # with three or more: the camera shown next to camera 1
         self._result: CalibrationResult | None = None
         self._cam = 0                           # the camera whose images are added to and whose result is shown
         self._left_out = ""                     # said once more after the calibration that follows adding images
@@ -136,11 +139,51 @@ class Workbench(QWidget):
         self._result = value
         if value is None:
             self.rig = None
+            self.group = None
 
     def _result_of(self, camera: int) -> CalibrationResult | None:
+        if self.group is not None:
+            return self.group.cameras[camera] if camera < len(self.group.cameras) else None
         if self.rig is not None:
             return self.rig.second if camera else self.rig.first
         return None if self.project.second_camera else self._result
+
+    def _add_cam_row(self, i: int) -> None:
+        row_ = frame("sheet")
+        row_.setCursor(Qt.CursorShape.PointingHandCursor)
+        row_.setToolTip("Select this camera: images are added to it, and its own result is shown.")
+        row_.mouseReleaseEvent = lambda _e, which=i: self._select_camera(which)
+        rh = QHBoxLayout(row_)
+        rh.setSpacing(8)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        col.addWidget(label(f"Camera {i + 1}", font=T.mono(13, 600)))
+        sub = label("", "small")
+        col.addWidget(sub)
+        rh.addLayout(col, 1)
+        err = label("", font=T.mono(13, 600))
+        rh.addWidget(err, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.cams_layout.addWidget(row_)
+        self.cam_rows.append((row_, sub, err))
+
+    def _add_cam_tab(self, i: int) -> None:
+        b_ = QPushButton("")
+        b_.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_.clicked.connect(lambda _on, which=i: self._select_camera(which))
+        self.tabs_row.insertWidget(i, b_)
+        self.cam_tabs.append(b_)
+
+    def _sync_cameras(self) -> None:
+        """As many rows on the left and tabs on the right as the project has cameras (never fewer than two)."""
+        want = max(2, self.project.camera_count)
+        while len(self.cam_rows) < want:
+            self._add_cam_row(len(self.cam_rows))
+            self._add_cam_tab(len(self.cam_tabs))
+        while len(self.cam_rows) > want:
+            for gone in (self.cam_rows.pop()[0], self.cam_tabs.pop()):
+                gone.hide()
+                gone.setParent(None)
+                gone.deleteLater()
 
     # ---------------------------------------------------------------- layout
     def _header(self) -> QWidget:
@@ -198,25 +241,10 @@ class Workbench(QWidget):
         cb.setContentsMargins(16, 0, 16, 2)
         cb.setSpacing(6)
         cb.addWidget(label("CAMERAS", "eyebrow"))
+        self.cams_layout = cb
         self.cam_rows = []
         for i in range(2):
-            row_ = frame("sheet")
-            row_.setCursor(Qt.CursorShape.PointingHandCursor)
-            row_.setToolTip("Select this camera: images are added to it, and its own result is shown.")
-            row_.mouseReleaseEvent = lambda _e, which=i: self._select_camera(which)
-            rh = QHBoxLayout(row_)
-            rh.setContentsMargins(10, 7, 10, 7)
-            rh.setSpacing(8)
-            col = QVBoxLayout()
-            col.setSpacing(1)
-            col.addWidget(label(f"Camera {i + 1}", font=T.mono(13, 600)))
-            sub = label("", "small")
-            col.addWidget(sub)
-            rh.addLayout(col, 1)
-            err = label("", font=T.mono(13, 600))
-            rh.addWidget(err, 0, Qt.AlignmentFlag.AlignVCenter)
-            cb.addWidget(row_)
-            self.cam_rows.append((row_, sub, err))
+            self._add_cam_row(i)
         v.addWidget(self.cams_box)
         self.cams_rule = rule()
         v.addWidget(self.cams_rule)
@@ -263,10 +291,16 @@ class Workbench(QWidget):
         self.camera_link.setStyleSheet(
             f'border: 0; background: transparent; padding: 0; min-height: 0; text-align: left; color: {T.INK_MUTED}; '
             f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500; text-decoration: underline;')
-        self.camera_link.clicked.connect(self._toggle_second_camera)
+        self.camera_link.clicked.connect(self._add_camera)
+        self.remove_link = QPushButton("")
+        self.remove_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remove_link.setStyleSheet(self.camera_link.styleSheet())
+        self.remove_link.clicked.connect(self._remove_camera)
         link_row = QHBoxLayout()
         link_row.setContentsMargins(16, 0, 16, 0)
+        link_row.setSpacing(14)
         link_row.addWidget(self.camera_link)
+        link_row.addWidget(self.remove_link)
         link_row.addStretch(1)
         v.addLayout(link_row)
 
@@ -538,7 +572,15 @@ class Workbench(QWidget):
         rv = QVBoxLayout(self.rig_box)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(6)
-        rv.addWidget(label("CAMERA 2, SEEN FROM CAMERA 1", "eyebrow"))
+        self.rig_head = label("CAMERA 2, SEEN FROM CAMERA 1", "eyebrow")
+        rv.addWidget(self.rig_head)
+        self.places_box = frame("sheet")         # three or more cameras: every camera's distance and angle
+        self.places_grid = QGridLayout(self.places_box)
+        self.places_grid.setContentsMargins(12, 6, 12, 6)
+        self.places_grid.setHorizontalSpacing(12)
+        self.places_grid.setVerticalSpacing(2)
+        self.places_grid.setColumnStretch(1, 1)
+        rv.addWidget(self.places_box)
         self.rig_keys = ("Apart", "Turned", "X (right), mm", "Y (down), mm", "Z (forward), mm")
         box = frame("sheet")
         g = QGridLayout(box)
@@ -560,17 +602,13 @@ class Workbench(QWidget):
             "camera's own parameters are known.")
         rv.addWidget(self.rig_note)
         rv.addSpacing(8)
-        tabs_row = QHBoxLayout()
-        tabs_row.setSpacing(12)
+        self.tabs_row = QHBoxLayout()
+        self.tabs_row.setSpacing(12)
         self.cam_tabs = []
+        self.tabs_row.addStretch(1)
         for i in range(2):
-            b_ = QPushButton(f"CAMERA {i + 1}")
-            b_.setCursor(Qt.CursorShape.PointingHandCursor)
-            b_.clicked.connect(lambda _on, which=i: self._select_camera(which))
-            tabs_row.addWidget(b_)
-            self.cam_tabs.append(b_)
-        tabs_row.addStretch(1)
-        rv.addLayout(tabs_row)
+            self._add_cam_tab(i)
+        rv.addLayout(self.tabs_row)
         v.addWidget(self.rig_box)
         v.addWidget(label("INTRINSICS, PX", "eyebrow"))
         self.intr = self._kv_grid(("fx", "fy", "cx", "cy"))
@@ -803,7 +841,8 @@ class Workbench(QWidget):
 
     def _own_model_toggled(self, on: bool) -> None:
         p = self.project
-        p.second_options = replace(p.options) if on else None
+        for cam in range(1, p.camera_count):
+            p.set_options(cam, replace(p.options) if on else None)
         self._fill_model(p.options_of(self._cam))
         if self.result is not None:
             self.result = None
@@ -827,13 +866,9 @@ class Workbench(QWidget):
         self._model_texts()
         o, p = self.current_options(), self.project
         if p.second_camera and p.second_options is not None:
-            # The lens settings belong to the selected camera; the board is one board for both.
-            if self._cam:
-                p.second_options = o
-                p.options = replace(p.options, release_board=o.release_board)
-            else:
-                p.options = o
-                p.second_options = replace(p.second_options, release_board=o.release_board)
+            # The lens settings belong to the selected camera; the board is one board for all of them.
+            for cam in range(p.camera_count):
+                p.set_options(cam, o if cam == self._cam else replace(p.options_of(cam), release_board=o.release_board))
         else:
             p.options = o
         if self.result is not None:
@@ -844,7 +879,7 @@ class Workbench(QWidget):
     def load_project(self, project: Project) -> None:
         self.project = project
         self.result = None
-        self._cam = 0
+        self._cam, self._other = 0, 1
         self.view.corrected_btn.setChecked(False)  # every project opens on the images as they were taken
         t = project.target
         if t is not None:
@@ -889,35 +924,57 @@ class Workbench(QWidget):
         if not self.project.second_camera or which == self._cam:
             return
         self._cam = which
+        if which:
+            self._other = which
         self._result = self._result_of(which)
         if self.project.second_options is not None:
             self._fill_model(self.project.options_of(which))
         self._refresh()
 
     def _toggle_second_camera(self) -> None:
+        """One camera: add the second. Two: remove it."""
+        if self.project.second_camera:
+            self._remove_camera()
+        else:
+            self._add_camera()
+
+    def _add_camera(self) -> None:
         p = self.project
         if self._busy():
             return
-        if not p.second_camera:
-            p.second_camera = True
-            self._cam = 1
-            self.result = None
+        if p.camera_count >= MOST_CAMERAS:
+            self._say(f"A project holds up to {MOST_CAMERAS} cameras.")
+            return
+        self._cam = self._other = p.add_camera()
+        self.result = None
+        if p.camera_count == 2:
             self._say("Camera 2 added. Add its images: they pair with camera 1's in file-name order.")
         else:
-            if p.second_image_paths and QMessageBox.question(
-                    self, "Plumbline", "Remove camera 2 and its images from this project?") \
-                    != QMessageBox.StandardButton.Yes:
-                return
-            p.second_camera, p.second_image_paths, p.second_detections, p.second_options = False, [], [], None
+            self._say(f"Camera {p.camera_count} added. Add its images: they go with the other cameras' in "
+                      "file-name order.")
+        self._refresh()
+
+    def _remove_camera(self) -> None:
+        p = self.project
+        count = p.camera_count
+        if self._busy() or count < 2:
+            return
+        if p.paths_of(count - 1) and QMessageBox.question(
+                self, "Plumbline", f"Remove camera {count} and its images from this project?") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        p.remove_last_camera()
+        if not p.second_camera:
             self.own_model.blockSignals(True)
             self.own_model.setChecked(False)
             self.own_model.blockSignals(False)
-            self._fill_model(p.options)
-            self._cam = 0
-            self.result = None
-            self._say("Camera 2 removed.")
+        self._cam = min(self._cam, p.camera_count - 1)
+        self._other = max(1, min(self._other, p.camera_count - 1))
+        self._fill_model(p.options_of(self._cam))
+        self.result = None
+        self._say(f"Camera {count} removed.")
         self._refresh()
-        if not p.second_camera and any(d.usable for d in p.detections):
+        if any(d.usable for d in p.detections):
             self.run_calibration()
 
     def reset(self) -> None:
@@ -932,21 +989,28 @@ class Workbench(QWidget):
         if not paths:
             paths, _ = QFileDialog.getOpenFileNames(self, "Add images", "", IMAGE_FILTER)
         pr = self.project
-        known = set(pr.image_paths) | set(pr.second_image_paths)
+        count = pr.camera_count
+        known = {q for cam in range(count) for q in pr.paths_of(cam)}
         new = [p for p in paths if p not in known]
         if not new:
             return
-        # Images of two cameras handed over together: the file names tell them apart and pair them.
-        fresh = not pr.image_paths and not pr.second_image_paths
-        level = pr.second_camera and len(pr.image_paths) == len(pr.second_image_paths)
+        # Images of several cameras handed over together: the file names tell them apart and pair them.
+        sizes = {len(pr.paths_of(cam)) for cam in range(count)}
+        fresh = sizes == {0}
+        level = pr.second_camera and len(sizes) == 1
         split = split_by_camera(new) if fresh or level else None
+        if split is not None and count > 1 and len(split.cameras) != count and not (fresh and len(split.cameras) > count):
+            split = None      # the names show another number of cameras than this project has
         if split is not None:
-            pr.second_camera = True
-            pr.image_paths.extend(split.first)
-            pr.second_image_paths.extend(split.second)
-            pr.detections, pr.second_detections = [], []
-            said = (f"Two cameras found in the file names ({split.labels[0]} / {split.labels[1]}): "
-                    f"{len(split.first)} pairs.")
+            while pr.camera_count < len(split.cameras):
+                pr.add_camera()
+            for cam, mine in enumerate(split.cameras):
+                pr.paths_of(cam).extend(mine)
+                pr.set_detections(cam, [])
+            self._sync_own_model()
+            k = len(split.cameras)
+            said = (f"{'Two' if k == 2 else k} cameras found in the file names ({' / '.join(split.labels)}): "
+                    f"{len(split.first)} {'pairs' if k == 2 else 'sets'}.")
             if split.alone:
                 k = len(split.alone)
                 self._left_out = (f" {k} image{'' if k == 1 else 's'} without a partner "
@@ -957,7 +1021,8 @@ class Workbench(QWidget):
             mine = pr.paths_of(self._cam)
             mine.extend(new)
             mine.sort(key=natural)
-            pr.detections, pr.second_detections = [], []
+            for cam in range(count):
+                pr.set_detections(cam, [])
             said = f"{len(new)} images added to camera {self._cam + 1}."
         else:
             pr.image_paths.extend(new)
@@ -967,6 +1032,14 @@ class Workbench(QWidget):
         self._refresh()
         if self.project.target is not None:
             self.run_detection()
+
+    def _sync_own_model(self) -> None:
+        """Cameras added by the file names take camera 1's lens settings unless every camera has its own."""
+        p = self.project
+        if p.second_options is not None:
+            for cam in range(2, p.camera_count):
+                if p.more_cameras[cam - 2].options is None:
+                    p.set_options(cam, replace(p.options))
 
     def run_detection(self):
         target = self.project.target
@@ -979,19 +1052,21 @@ class Workbench(QWidget):
             return
         if self._busy():
             return
-        paths = list(self.project.image_paths)
-        paths2 = list(self.project.second_image_paths) if self.project.second_camera else []
+        lists = [list(self.project.paths_of(cam)) for cam in range(self.project.camera_count)]
+        every = [q for one in lists for q in one]
 
         def job(progress):
             out = []
-            for i, p in enumerate(paths + paths2):
+            for i, p in enumerate(every):
                 out.append(detect_file(p, target))
-                progress(i + 1, len(paths) + len(paths2))
+                progress(i + 1, len(every))
             return out
 
         def done(dets):
-            self.project.detections = dets[:len(paths)]
-            self.project.second_detections = dets[len(paths):]
+            at = 0
+            for cam, one in enumerate(lists):
+                self.project.set_detections(cam, dets[at:at + len(one)])
+                at += len(one)
             self.project.excluded = set()
             self.result = None
             good = sum(d.usable for d in dets)
@@ -1013,6 +1088,29 @@ class Workbench(QWidget):
         if self._busy():
             return
         options, excluded = self.project.options, set(self.project.excluded)
+        count = self.project.camera_count
+        if count >= 3:
+            every = [self.project.detections_of(cam) for cam in range(count)]
+            if len({len(d) for d in every}) != 1:
+                self.result = None
+                self._say("The cameras have " + ", ".join(str(len(d)) for d in every) + " images. Every set needs "
+                          "one image from each camera, taken at the same moment.")
+                self._refresh()
+                return
+
+            def done_group(group: GroupResult):
+                self.group = group
+                self._result = group.cameras[self._cam]
+                self.project.last_rms_point = group.rms_point
+                self.tabs.setCurrentIndex(2)
+                self._say(f"Calibrated {count} cameras from {len(group.sets)} sets, RMS {group.rms_point:.3f} px."
+                          + self._left_out)
+                self._left_out = ""
+                self._refresh()
+
+            each = [self.project.options_of(cam) for cam in range(count)]
+            self._start(lambda _p: calibrate_group(every, target, each, excluded), done_group, "Calibrating")
+            return
         if self.project.second_camera:
             dets2 = self.project.second_detections
             if len(dets) != len(dets2):
@@ -1047,11 +1145,12 @@ class Workbench(QWidget):
         self._start(lambda _p: calibrate(dets, target, options, excluded), done, "Calibrating")
 
     def export_all(self):
-        rig = self.rig if self.project.second_camera else None
-        if self.result is None or (self.project.second_camera and rig is None):
+        rig = self.rig if self.project.camera_count == 2 else None
+        group = self.group if self.project.camera_count >= 3 else None
+        if self.result is None or (self.project.second_camera and rig is None and group is None):
             self._say("Calibrate first, then export.")
             return
-        dialog = ExportDialog(self.project, self.result, self, rig=rig)
+        dialog = ExportDialog(self.project, self.result, self, rig=rig, group=group)
         if dialog.exec() != ExportDialog.DialogCode.Accepted:
             return
         self.export_to(dialog.folder, dialog.project_name, dialog.formats(), dialog.recheck_months)
@@ -1070,8 +1169,10 @@ class Workbench(QWidget):
         formats = set(formats) if formats is not None else {"report", "opencv_yaml", "json", "ros"}
         if "example" in formats:
             formats.add("opencv_yaml")  # the example reads this file
-        rig = self.rig if self.project.second_camera else None
-        signature = rig_signature(rig) if rig is not None else result_signature(self.result)
+        rig = self.rig if self.project.camera_count == 2 else None
+        group = self.group if self.project.camera_count >= 3 else None
+        signature = (rig_signature(rig) if rig is not None else group_signature(group) if group is not None
+                     else result_signature(self.result))
         revision = self.project.revision_for(signature)
         written = []
         if rig is not None:
@@ -1096,6 +1197,23 @@ class Workbench(QWidget):
                                  base / both["rig_report"], name, revision,
                                  tuple(export_files(name, revision, cam)["report"] for cam in (1, 2)))
                 written.append(both["rig_report"])
+        elif group is not None:
+            count = len(group.cameras)
+            for cam, result in enumerate(group.cameras, 1):
+                written += self._write_camera(result, self.project.detections_of(cam - 1), base,
+                                              export_files(name, revision, cam), formats, f"{name} · camera {cam}",
+                                              revision, f"{safe_name(name)}_cam{cam}", f"Camera {cam} of {count}")
+            both = rig_files(name, revision)
+            own = [export_files(name, revision, cam)["json" if "json" in formats else "opencv_yaml"]
+                   for cam in range(1, count + 1)]
+            export.write_group_json(group, base / both["rig_json"], own if formats & {"json", "opencv_yaml"} else None)
+            export.write_group_yaml(group, base / both["rig_yaml"])
+            written += [both["rig_json"], both["rig_yaml"]]
+            if "report" in formats:
+                write_group_report(group, [self.project.detections_of(cam) for cam in range(count)],
+                                   base / both["rig_report"], name, revision,
+                                   [export_files(name, revision, cam)["report"] for cam in range(1, count + 1)])
+                written.append(both["rig_report"])
         else:
             written += self._write_camera(self.result, self.project.detections, base, export_files(name, revision),
                                           formats, name, revision, safe_name(name))
@@ -1107,9 +1225,13 @@ class Workbench(QWidget):
             self.project.recheck_months = recheck_months
         self.project.save(str(base / project_file))
         self.project_saved.emit(self.project.path, self.project.target.describe(),
-                                rig.rms_point if rig is not None else self.result.rms_point, self.project.due_date())
+                                rig.rms_point if rig is not None else group.rms_point if group is not None
+                                else self.result.rms_point, self.project.due_date())
         if rig is not None:   # too many names for one line: the count, and where they are
             self._say(f"Revision {revision} saved to {base}: {len(written)} files, for camera 1, camera 2 and both.")
+        elif group is not None:
+            self._say(f"Revision {revision} saved to {base}: {len(written)} files, for each of the "
+                      f"{len(group.cameras)} cameras and for all together.")
         else:
             self._say(f"Revision {revision} saved to {base}: {', '.join(written)}.")
         self._refresh()
@@ -1195,8 +1317,7 @@ class Workbench(QWidget):
 
     def _row_usable(self, index: int) -> bool:
         """A row can be excluded or restored if at least one of its images shows the target."""
-        cams = (0, 1) if self.project.second_camera else (0,)
-        for cam in cams:
+        for cam in range(self.project.camera_count):
             dets = self.project.detections_of(cam)
             if 0 <= index < len(dets) and dets[index].usable:
                 return True
@@ -1209,11 +1330,23 @@ class Workbench(QWidget):
         self.view_rule.setVisible(two)
         if two:
             self._show_one(self.view, 0, row, self._result_of(0))
-            self._show_one(self.view2, 1, row, self._result_of(1))
+            beside = self._beside()
+            self._show_one(self.view2, beside, row, self._result_of(beside))
         else:
             self._show_one(self.view, 0, row, self.result)
         self._update_toggle()
         self._refresh_chart()
+
+    def _beside(self) -> int:
+        """The camera whose image is shown next to camera 1's."""
+        count = self.project.camera_count
+        return 1 if count <= 2 else max(1, min(self._other, count - 1))
+
+    def _together(self) -> list:
+        """One entry per pair or set that takes part, whichever result there is."""
+        if self.group is not None:
+            return self.group.sets
+        return self.rig.pairs if self.rig is not None else []
 
     def _show_one(self, view: ImageView, cam: int, row: int, r: CalibrationResult | None) -> None:
         """Put one camera's image of the selected row into a view."""
@@ -1226,7 +1359,7 @@ class Workbench(QWidget):
             elif not paths:
                 view.set_message(f"Camera {cam + 1}\n\nNo images yet.\n\nSelect this camera on the left\nand add its images.")
             else:
-                view.set_message(f"Camera {cam + 1}\n\nNo image for this pair.")
+                view.set_message(f"Camera {cam + 1}\n\nNo image for this {'pair' if self.project.camera_count == 2 else 'set'}.")
             return
         det = dets[row] if row < len(dets) else None
         fit = next((v for v in r.views if v.index == row), None) if r is not None else None
@@ -1286,9 +1419,10 @@ class Workbench(QWidget):
         bars = []
         if self.project.second_camera:
             # One bar per pair: both images together. A pair that takes no part has no bar.
-            by_index = {q.index: q.rms_point for q in self.rig.pairs} if self.rig is not None else {}
+            by_index = {q.index: q.rms_point for q in self._together()}
+            word = "pair" if self.project.camera_count == 2 else "set"
             for i in range(self.project.pair_count):
-                bars.append((i, by_index.get(i), i in self.project.excluded, f"pair {i + 1:02d}"))
+                bars.append((i, by_index.get(i), i in self.project.excluded, f"{word} {i + 1:02d}"))
             self.chart.set_data(bars, self._current)
             return
         for i, p in enumerate(self.project.image_paths):
@@ -1314,6 +1448,8 @@ class Workbench(QWidget):
         self.name_btn.setToolTip((full + "\n" if cut != full else "")
                                  + "Rename this project. Exported files carry this name.")
         two = p.second_camera
+        count = p.camera_count
+        self._sync_cameras()
         self._lay_out_for(two)
         if two:
             self._fill_pairs()
@@ -1349,8 +1485,8 @@ class Workbench(QWidget):
             self.table.selectRow(keep)
         self._show(keep if n else -1)
         if two:
-            used = len(self.rig.pairs) if self.rig is not None else 0
-            self.images_count.setText(f"{n} pairs · {used} used" if n else "")
+            used = len(self._together())
+            self.images_count.setText(f"{n} {'pairs' if count == 2 else 'sets'} · {used} used" if n else "")
         else:
             self.images_count.setText(f"{n} loaded" if n else "")
 
@@ -1371,14 +1507,14 @@ class Workbench(QWidget):
         # Header steps.
         t = p.target
         if two:
-            dets = list(p.detections) + list(p.second_detections)
-            n_images = len(p.image_paths) + len(p.second_image_paths)
+            dets = [d for cam in range(count) for d in p.detections_of(cam)]
+            n_images = sum(len(p.paths_of(cam)) for cam in range(count))
         good = sum(d.usable for d in dets)
-        rig = self.rig
+        rig = self.rig if count == 2 else self.group if count >= 3 else None
         if two:
             states = [
                 ("done" if t else "next", t.short_label if t else "Check the settings"),
-                ("done" if n_images else "next" if t else "off", f"2 cameras · {n} pairs" if n_images else "Add images"),
+                ("done" if n_images else "next" if t else "off", f"{count} cameras · {n} {'pairs' if count == 2 else 'sets'}" if n_images else "Add images"),
                 ("done" if dets else "next" if n_images and t else "off",
                  f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
                 ("done" if rig else "next" if good else "off", f"RMS {rig.rms_point:.2f} px" if rig else "Solve the cameras"),
@@ -1422,7 +1558,15 @@ class Workbench(QWidget):
                         {k: u.std_of(k) for k in r.distortion_names} if u is not None else {})
         # With two cameras: first what concerns both, then the selected camera's own findings.
         self._fill_findings(self._make_findings(r, share, rig if two else None))
-        if two and rig is not None:
+        if count >= 3 and rig is not None:
+            self.rms_big.setText(f"{rig.rms_point:.3f} px")
+            alone = [f"{c.rms_point:.3f}" for c in rig.cameras]
+            self.rms_note.setText("All cameras together, per point. Alone: " + ", ".join(alone[:-1]) + f" and {alone[-1]} px.")
+            points = sum(q.points for q in rig.sets)
+            left_out = f" · {len(rig.unused)} not used" if rig.unused else ""
+            self.used_note.setText(f"{len(rig.sets)} of {n} sets, {points:,} {r.target.point_word} seen by two or more "
+                                   f"cameras{left_out}")
+        elif two and rig is not None:
             self.rms_big.setText(f"{rig.rms_point:.3f} px")
             self.rms_note.setText(f"Both cameras together, per point. Camera 1 alone {rig.first.rms_point:.3f} px, "
                                   f"camera 2 alone {rig.second.rms_point:.3f} px.")
@@ -1447,86 +1591,124 @@ class Workbench(QWidget):
         self.cams_box.setVisible(two)
         self.cams_rule.setVisible(two)
         self.rig_box.setVisible(two)
-        self.images_head.setText("PAIRS" if two else "IMAGES")
-        self.chart_head.setText("ERROR PER PAIR" if two else "ERROR PER IMAGE")
-        self.chart.per = "pair" if two else "image"
+        count = self.project.camera_count
+        many = count >= 3
+        word = "set" if many else "pair"
+        self.images_head.setText(("SETS" if many else "PAIRS") if two else "IMAGES")
+        self.chart_head.setText(f"ERROR PER {word.upper()}" if two else "ERROR PER IMAGE")
+        self.chart.per = word if two else "image"
         own = two and self.project.second_options is not None
         self.own_box.setVisible(two)
+        self.own_model.setText("Each camera has its own lens settings" if many else "Camera 2 has its own lens settings")
         self.model_for.setVisible(own)
-        self.model_for.setText(f"The lens settings below are for camera {self._cam + 1}. Select the other camera "
-                               "on the left to see its settings. The board setting is for both.")
-        self.camera_link.setText("Remove camera 2" if two else "Add a second camera")
+        self.model_for.setText(f"The lens settings below are for camera {self._cam + 1}. Select "
+                               f"{'another' if many else 'the other'} camera on the left to see its settings. "
+                               f"The board setting is for {'all of them' if many else 'both'}.")
+        self.camera_link.setText("Add a camera" if two else "Add a second camera")
+        self.remove_link.setVisible(two)
+        self.remove_link.setText(f"Remove camera {count}")
+        self.places_box.setVisible(many)
         hh = self.table.horizontalHeader()
-        want = 4 if two else 3
-        if self.table.columnCount() != want:
-            self.table.setColumnCount(want)
-            self.table.setHorizontalHeaderLabels(["Pair", "Cam 1", "Cam 2", "Error, px"] if two
-                                                 else ["File", "Corners", "Error, px"])
+        beside = self._beside()
+        kind = (count if count < 3 else 3, beside if many else 0)
+        if getattr(self, "_table_kind", None) != kind:
+            self._table_kind = kind
+            heads, widths = (["File", "Corners", "Error, px"], ((1, 70), (2, 84)))
+            if many:      # camera 1, the camera shown next to it, and how many cameras saw the target
+                heads, widths = (["Set", "Cam 1", f"Cam {beside + 1}", "Seen", "Error, px"], ((1, 52), (2, 52), (3, 48), (4, 82)))
+            elif two:
+                heads, widths = (["Pair", "Cam 1", "Cam 2", "Error, px"], ((1, 58), (2, 58), (3, 84)))
+            self.table.setColumnCount(len(heads))
+            self.table.setHorizontalHeaderLabels(heads)
             hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-            for c, width in (((1, 58), (2, 58), (3, 84)) if two else ((1, 70), (2, 84))):
+            for c, width in widths:
                 hh.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
                 self.table.setColumnWidth(c, width)
+        tight = count >= 4     # more rows in the same space
         for i, (row_, sub, err) in enumerate(self.cam_rows):
+            row_.layout().setContentsMargins(10, 4 if tight else 7, 10, 4 if tight else 7)
             on = two and i == self._cam
             row_.setStyleSheet(f"QFrame {{ border: 1px solid {T.INK if on else T.HAIRLINE}; background: {T.SHEET}; }} "
                                "QLabel { border: 0; background: transparent; }")
             paths, dets = self.project.paths_of(i), self.project.detections_of(i)
             size = next((f"{d.width} × {d.height} · " for d in dets if d.width), "")
             sub.setText(f"{size}{len(paths)} images" if paths else "no images yet")
+            sub.setVisible(not tight)
+            row_.setToolTip(("" if not tight else sub.text() + "\n")
+                            + "Select this camera: images are added to it, and its own result is shown.")
             res = self._result_of(i) if two else None
             err.setText(f"{res.rms_point:.3f} px" if res is not None else "")
         for i, b_ in enumerate(self.cam_tabs):
             on = i == self._cam
+            b_.setText(f"CAM {i + 1}" if many else f"CAMERA {i + 1}")
             b_.setStyleSheet(
                 f'border: 0; border-bottom: 2px solid {T.INK if on else "transparent"}; background: transparent; '
                 f'padding: 0 0 2px 0; min-height: 0; color: {T.INK if on else T.INK_MUTED}; '
                 f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
 
     def _fill_pairs(self) -> None:
-        """The table with two cameras: one row per pair."""
+        """The table with two or more cameras: one row per pair or set."""
         p = self.project
-        by_index = {q.index: q for q in self.rig.pairs} if self.rig is not None else {}
+        by_index = {q.index: q for q in self._together()}
         n = p.pair_count
+        count = p.camera_count
+        many = count >= 3
+        shown = (0, self._beside())
         self.table.blockSignals(True)
         self.table.setRowCount(n)
         for i in range(n):
             counts, missing = [], False
-            for cam in (0, 1):
+            good = checked = 0
+            for cam in range(count):
                 paths, dets = p.paths_of(cam), p.detections_of(cam)
                 if i >= len(paths):
-                    counts.append("–")
-                    missing = True
+                    text, lacking = "–", True
                 elif i >= len(dets):
-                    counts.append("")
+                    text, lacking = "", False
                 else:
-                    counts.append(str(dets[i].count))
-                    missing = missing or not dets[i].usable
+                    text, lacking = str(dets[i].count), not dets[i].usable
+                    checked += 1
+                    good += dets[i].usable
+                if cam in shown:
+                    counts.append(text)
+                missing = missing or lacking
+            if many:
+                counts.append(f"{good}/{count}" if checked else "")
+                missing = checked > 0 and good < 2
             excluded = i in p.excluded
             if excluded:
                 err = "out"
             elif i in by_index:
                 err = f"{by_index[i].rms_point:.3f}"
-            elif missing and p.image_paths and p.second_image_paths and (p.detections or p.second_detections):
+            elif many and missing:
+                err = "alone"
+            elif not many and missing and p.image_paths and p.second_image_paths and (p.detections or p.second_detections):
                 err = "no pair"
             else:
                 err = ""
-            tip = " · ".join(Path(paths[i]).name for paths in (p.image_paths, p.second_image_paths) if i < len(paths))
-            for c, text in enumerate((f"{i + 1:02d}", counts[0], counts[1], err)):
+            tip = " · ".join(Path(p.paths_of(cam)[i]).name for cam in range(count) if i < len(p.paths_of(cam)))
+            for c, text in enumerate((f"{i + 1:02d}", *counts, err)):
                 item = QTableWidgetItem(text)
                 item.setToolTip(tip)
                 if c:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if excluded or err == "no pair":
+                if excluded or err in ("no pair", "alone"):
                     item.setForeground(Qt.GlobalColor.darkRed)
                 self.table.setItem(i, c, item)
         self.table.blockSignals(False)
 
     def _fill_rig(self) -> None:
         rig = self.rig
+        count = self.project.camera_count
+        beside = self._beside()
+        self.rig_head.setText(f"CAMERA {beside + 1}, SEEN FROM CAMERA 1")
+        if count >= 3:
+            rig = self.group.placed[beside - 1] if self.group is not None else None
+            self._fill_places()
         if rig is None:
             for val in self.rig_values.values():
                 val.setText("–")
-            self.rig_note.setText("Where camera 2 sits and how far it is turned, measured from camera 1.")
+            self.rig_note.setText(f"Where camera {beside + 1} sits and how far it is turned, measured from camera 1.")
             return
         known = bool(np.isfinite(rig.apart_std_mm))
         (x, y, z), spread = rig.position, rig.position_std
@@ -1541,7 +1723,9 @@ class Workbench(QWidget):
                  pm(x, spread[0]), pm(y, spread[1]), pm(z, spread[2]))
         for k, text in zip(self.rig_keys, texts):
             self.rig_values[k].setText(text)
-        note = "Where camera 2 sits and how far it is turned, measured from camera 1."
+        note = f"Where camera {beside + 1} sits and how far it is turned, measured from camera 1."
+        if count >= 3:
+            note = "Click a camera for its X, Y and Z."
         if known:
             note += " ± is one standard deviation."
         self.rig_note.setText(note)
@@ -1559,6 +1743,23 @@ class Workbench(QWidget):
                 wdg.deleteLater()
             elif item.layout() is not None:
                 Workbench._clear(item.layout())
+
+    def _fill_places(self) -> None:
+        """Three or more cameras: one line per camera with its distance and angle from camera 1."""
+        g = self.places_grid
+        self._clear(g)
+        for c, head in enumerate(("", "Apart, mm", "Turned, °")):
+            g.addWidget(label(head, "small"), 0, c, Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
+        beside = self._beside()
+        for cam in range(1, self.project.camera_count):
+            placed = self.group.placed[cam - 1] if self.group is not None else None
+            on = cam == beside
+            cells = (f"Camera {cam + 1}", f"{placed.apart_mm:.2f}" if placed else "–", f"{placed.turned_deg:.2f}" if placed else "–")
+            for c, text in enumerate(cells):
+                cell = label(text, font=T.mono(13, 600 if (c or on) else 400), color=T.INK if (c or on) else T.INK_MUTED)
+                cell.setCursor(Qt.CursorShape.PointingHandCursor)
+                cell.mouseReleaseEvent = lambda _e, which=cam: self._select_camera(which)
+                g.addWidget(cell, cam, c, Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
 
     def _fill_dist(self, pairs, spread=None):
         spread = spread or {}
@@ -1578,9 +1779,9 @@ class Workbench(QWidget):
         lay.setColumnStretch(3, 1)
         lay.setColumnMinimumWidth(2, 28)
 
-    def _make_findings(self, r: CalibrationResult, share: float, rig: RigResult | None = None):
+    def _make_findings(self, r: CalibrationResult, share: float, rig=None):
         colors = {PASS: T.GREEN_TEXT, CHECK: T.RED_TEXT, NOTE: T.INK_MUTED}
-        both = rig_findings(rig) if rig is not None else []
+        both = [] if rig is None else group_findings(rig) if isinstance(rig, GroupResult) else rig_findings(rig)
         return [(tag, colors[tag], text) for tag, text in both + findings(r, share)]
 
     def _fill_findings(self, items):

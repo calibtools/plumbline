@@ -45,3 +45,16 @@ def test_one_camera_stays_one_camera():
     assert split_by_camera([f"/data/view-0{i}.png" for i in range(10)] + [f"/data/view-1{i}.png" for i in range(10)]) is None
     assert split_by_camera(["/data/left_1.png", "/data/right_1.png"]) is None     # too few to be sure
     assert split_by_camera([f"/d/IMG_{2000 + i}.JPG" for i in range(20)]) is None
+
+
+def test_three_and_more_cameras():
+    sets = [[f"/data/cam{c}-{i:02d}.png" for i in range(8)] for c in (1, 2, 3)]
+    split = split_by_camera(sorted(sum(sets, []), key=lambda p: p[::-1]))
+    assert split.cameras == sets and split.labels == ("1", "2", "3") and not split.alone
+    # A set with one image missing is set aside whole.
+    split = split_by_camera(sets[0] + sets[1] + sets[2][:7])
+    assert [len(c) for c in split.cameras] == [7, 7, 7] and split.alone == [sets[0][7], sets[1][7]]
+    # Four folders.
+    folders = [[f"/data/{name}/img_{i:02d}.png" for i in range(6)] for name in ("a", "b", "c", "d")]
+    split = split_by_camera(sum(folders, []))
+    assert split.cameras == folders and split.labels == ("a", "b", "c", "d")
