@@ -233,7 +233,8 @@ class ExportDialog(QDialog):
             both = rig_files(self.project_name, self._revision)
             self.revision_note.setText(
                 self.revision_note.text() + " Two cameras: the files ticked below are written for cam1 and again "
-                f"for cam2. {both['rig_json']} and {both['rig_yaml']} say how camera 2 sits relative to camera 1.")
+                f"for cam2. {both['rig_json']} and {both['rig_yaml']} say how camera 2 sits relative to camera 1; "
+                "with the report ticked, one more report covers both cameras.")
         notes = []
         if changed:
             notes.append(f"Characters that cannot be in a file name were removed: {self.project_name}.")

@@ -149,3 +149,35 @@ def model_sentence(result: CalibrationResult) -> str:
     if o.thin_prism:
         parts.append("thin prism terms s1 to s4")
     return ", ".join(parts) + "."
+
+
+def rig_findings(rig) -> list[tuple[str, str]]:
+    """What to know about how two cameras sit to each other, before each camera's own findings."""
+    out = []
+    n = len(rig.pairs)
+    errors = sorted(p.rms_point for p in rig.pairs)
+    middle = errors[n // 2]
+    if n < 10:
+        out.append((CHECK, f"Only {n} pairs show the target in both cameras. With 15 or more, from different "
+                           "angles and distances, the position of camera 2 is pinned down much better."))
+    else:
+        out.append((PASS, f"{n} pairs show the target in both cameras."))
+    worst = max(rig.pairs, key=lambda p: p.rms_point)
+    if n >= 4 and worst.rms_point > 3 * middle and worst.rms_point > 0.3:
+        out.append((CHECK, f"Pair {worst.index + 1:02d} fits much worse than the others ({worst.rms_point:.2f} px "
+                           f"against a typical {middle:.2f} px). The target or a camera may have moved between "
+                           "the two exposures. Try the result without this pair."))
+    if rig.apart_mm > 0 and rig.apart_std_mm == rig.apart_std_mm:
+        share = rig.apart_std_mm / rig.apart_mm
+        text = (f"Distance between the cameras {rig.apart_mm:.2f} mm ±{rig.apart_std_mm:.2f} mm "
+                f"({share * 100:.2f} %), angle ±{rig.turned_std_deg:.3f}°, one standard deviation.")
+        if share > 0.005:
+            out.append((CHECK, text + " Depth measured with this pair of cameras is off by about the same share. "
+                                      "Add pairs with the target close to the cameras and tilted."))
+        else:
+            out.append((NOTE, text))
+    if rig.unpaired:
+        k = len(rig.unpaired)
+        out.append((NOTE, f"{k} pair{' takes' if k == 1 else 's take'} no part in the position of camera 2: one of "
+                          "the two images has no usable detection, or the pair was excluded."))
+    return out

@@ -12,7 +12,7 @@ from PySide6.QtSvg import QSvgRenderer
 from .. import __version__
 from ..core.calibrate import CalibrationResult, coverage_grid
 from ..core.detect import Detection
-from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, model_sentence
+from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, model_sentence, rig_findings
 from . import theme as T
 from .widgets import _nice_ticks
 
@@ -53,6 +53,151 @@ def write_report(
     finally:
         p.end()
     return pages
+
+
+def write_rig_report(rig, first: list[Detection], second: list[Detection], path: str | Path,
+                     project_name: str = "Calibration", revision: int = 1,
+                     camera_reports: tuple[str, str] | None = None) -> int:
+    """Report on two cameras together: where camera 2 sits, and every pair. Returns the number of pages."""
+    writer = QPdfWriter(str(path))
+    writer.setResolution(96)
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
+    writer.setTitle(f"{project_name} calibration report for two cameras, revision {revision}")
+    writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
+    used = {q.index: q for q in rig.pairs}
+    rows = []
+    for i in range(max(len(first), len(second))):
+        names = [Path(d[i].path).name if i < len(d) else "–" for d in (first, second)]
+        q = used.get(i)
+        if q is not None:
+            status = "used"
+        elif i in rig.first.excluded or i in rig.second.excluded:
+            status = "excluded"
+        else:
+            status = "no pair"
+        rows.append((i + 1, names[0], names[1], q.points if q else None, q.rms_point if q else None, status))
+    pages = 1 + max(1, -(-len(rows) // ROWS_PER_PAGE))
+    p = QPainter(writer)
+    try:
+        p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
+        _rig_page(p, rig, rows, project_name, revision, 1, pages, camera_reports)
+        for n in range(pages - 1):
+            writer.newPage()
+            _pairs_page(p, rows[n * ROWS_PER_PAGE: (n + 1) * ROWS_PER_PAGE], project_name, n + 2, pages)
+    finally:
+        p.end()
+    return pages
+
+
+def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports) -> None:
+    _frame(p, page, pages, project_name)
+    W = PAGE_W - 2 * M
+    y = M + 48
+    y += _text(p, M, y, W, project_name, T.mono(22, 600)) + 4
+    y += _text(p, M, y, W, f"Two cameras  ·  {date.today().isoformat()}  \u00b7  Revision {revision}",
+               T.sans(12), T.INK_MUTED) + 22
+
+    _eyebrow(p, M, y, "RMS reprojection error, both cameras")
+    _eyebrow(p, M + W / 2 + 12, y, "Pairs")
+    y += 16
+    h1 = _text(p, M, y, W / 2, f"{rig.rms_point:.3f} px", T.mono(32, 600))
+    points = sum(q.points for q in rig.pairs)
+    _text(p, M + W / 2 + 12, y + 2, W / 2 - 12, f"{len(rig.pairs)} of {len(rows)} used  ·  {points:,} points",
+          T.mono(13, 600))
+    _text(p, M + W / 2 + 12, y + 22, W / 2 - 12,
+          "A pair is the two images taken at the same moment. Points are counted in both images.",
+          T.sans(11), T.INK_MUTED, wrap=True)
+    y += h1 + 2
+    y += _text(p, M, y, W / 2 - 12,
+               f"Per point, over both images of every pair. Camera 1 alone {rig.first.rms_point:.3f} px, "
+               f"camera 2 alone {rig.second.rms_point:.3f} px.", T.sans(11), T.INK_MUTED, wrap=True) + 20
+
+    # Where camera 2 sits.
+    _eyebrow(p, M, y, "Camera 2, seen from camera 1")
+    _eyebrow(p, M + (W - 16) / 2 + 16, y, "As in the files: x2 = R · x1 + T")
+    y += 16
+    half = (W - 16) / 2
+    x, yy, z = rig.position
+    known = rig.apart_std_mm == rig.apart_std_mm
+    h_a = _kv_table(p, M, y, half, [
+        ("Apart, mm", f"{rig.apart_mm:.2f} ± {rig.apart_std_mm:.2f}" if known else f"{rig.apart_mm:.2f}"),
+        ("Turned, degrees", f"{rig.turned_deg:.3f} ± {rig.turned_std_deg:.3f}" if known else f"{rig.turned_deg:.3f}"),
+        ("X (right), mm", f"{x:.2f}"), ("Y (down), mm", f"{yy:.2f}"), ("Z (forward), mm", f"{z:.2f}")], cols=1)
+    R, Tv = rig.rotation, rig.translation
+    h_b = _kv_table(p, M + half + 16, y, half,
+                    [(f"R, row {i + 1}", "  ".join(f"{v: .6f}" for v in R[i])) for i in range(3)]
+                    + [("T, mm", "  ".join(f"{v: .3f}" for v in Tv))], cols=1)
+    y += max(h_a, h_b) + 6
+    y += _text(p, M, y, W,
+               "X, Y and Z are where camera 2 sits in camera 1's own directions: to its right, downwards, and the "
+               "way it looks. ± is one standard deviation, from the scatter of the detected points and from how "
+               "well each camera's own parameters are known. It does not cover a target that is not flat or not "
+               "the size entered, or cameras that were not triggered together.",
+               T.sans(11), T.INK_MUTED, wrap=True) + 14
+
+    # The two cameras side by side.
+    _eyebrow(p, M, y, "The cameras")
+    y += 16
+    for n, cam in ((1, rig.first), (2, rig.second)):
+        _text(p, M, y, 70, f"Camera {n}", T.sans(11, 600))
+        line = (f"{cam.image_width} × {cam.image_height} px  ·  fx {cam.fx:.2f}  fy {cam.fy:.2f}  cx {cam.cx:.2f}  "
+                f"cy {cam.cy:.2f}  ·  {cam.rms_point:.3f} px alone")
+        h = _text(p, M + 76, y, W - 76, line, T.mono(11))
+        y += h + 2
+        more = model_sentence(cam) + (f"  Its own report: {camera_reports[n - 1]}" if camera_reports else "")
+        y += _text(p, M + 76, y, W - 76, more, T.sans(10), T.INK_MUTED, wrap=True) + 6
+    y += 12
+
+    _eyebrow(p, M, y, "Error per pair")
+    y += 16
+    _error_chart(p, QRectF(M, y, W, 130), [(r[4], r[5] == "excluded") for r in rows])
+    y += 130 + 4
+    y += _text(p, M, y, W, "px per pair, RMS per point over both images, in pair order. A pair without a bar "
+               "takes no part.", T.sans(10), T.INK_MUTED) + 18
+
+    _eyebrow(p, M, y, "Findings")
+    y += 16
+    for tag, text in rig_findings(rig):
+        _text(p, M, y + 1, 50, tag, T.mono(10, 600), TAG_COLOR[tag])
+        y += _text(p, M + 56, y, W - 56, text, T.sans(11), wrap=True) + 7
+
+
+def _pairs_page(p, rows, project_name, page, pages) -> None:
+    _frame(p, page, pages, project_name)
+    W = PAGE_W - 2 * M
+    y = M + 48
+    _eyebrow(p, M, y, "Pairs")
+    y += 18
+    cols = [("Pair", 0.00, 0.08, Qt.AlignmentFlag.AlignLeft), ("Camera 1", 0.08, 0.28, Qt.AlignmentFlag.AlignLeft),
+            ("Camera 2", 0.36, 0.28, Qt.AlignmentFlag.AlignLeft), ("Points", 0.64, 0.10, Qt.AlignmentFlag.AlignRight),
+            ("RMS, px", 0.74, 0.12, Qt.AlignmentFlag.AlignRight), ("Status", 0.89, 0.11, Qt.AlignmentFlag.AlignLeft)]
+    row_h = 23.0
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(T.RED_TINT))
+    p.drawRect(QRectF(M, y, W, row_h))
+
+    def cell(ci, text, yy, font, color):
+        _, x0, share, align = cols[ci]
+        x = M + x0 * W + (10 if align == Qt.AlignmentFlag.AlignLeft else 0)
+        _text(p, x, yy + 6, share * W - 10, text, font, color, align=align)
+
+    def short(name: str) -> str:
+        return name if len(name) <= 26 else name[:12] + "…" + name[-12:]
+
+    for ci, (title, _x, _w, _a) in enumerate(cols):
+        cell(ci, title, y, T.mono(10, 500), T.RED_TEXT)
+    y += row_h
+    for number, one, two, points, rms, status in rows:
+        color = T.INK if status == "used" else T.RED_TEXT
+        cell(0, f"{number:02d}", y, T.mono(11), color)
+        cell(1, short(one), y, T.mono(11), color)
+        cell(2, short(two), y, T.mono(11), color)
+        cell(3, str(points) if points is not None else "–", y, T.mono(11), color)
+        cell(4, f"{rms:.3f}" if rms is not None else "–", y, T.mono(11), color)
+        cell(5, status, y, T.sans(11), color)
+        y += row_h
+        _line(p, M, y, M + W, y)
 
 
 # ------------------------------------------------------------------ helpers
