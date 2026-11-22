@@ -22,7 +22,7 @@ from ..core.calibrate import (
 )
 from ..core.detect import Detection, detect_file, read_gray
 from ..core.naming import export_files, result_signature, rig_files, rig_signature, safe_name
-from ..core.export_code import write_example, write_maps
+from ..core.export_code import write_example, write_maps, write_rig_example
 from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, rig_findings
@@ -1085,9 +1085,12 @@ class Workbench(QWidget):
                                   own if formats & {"json", "opencv_yaml"} else None)
             export.write_rig_yaml(rig, base / both["rig_yaml"])
             written += [both["rig_json"], both["rig_yaml"]]
-            if "maps" in formats:
-                write_rectify_maps(rig, base / both["rig_maps"])
+            if formats & {"maps", "example"}:      # the two-camera example reads the tables
+                lined_up = write_rectify_maps(rig, base / both["rig_maps"])
                 written.append(both["rig_maps"])
+                if "example" in formats:
+                    write_rig_example(base / both["rig_example"], both["rig_maps"], lined_up.vertical)
+                    written.append(both["rig_example"])
             if "report" in formats:
                 write_rig_report(rig, self.project.detections, self.project.second_detections,
                                  base / both["rig_report"], name, revision,

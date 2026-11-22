@@ -54,7 +54,8 @@ def rig_files(name: str, revision: int) -> dict[str, str]:
     """The files that say how two cameras sit to each other."""
     stem = export_stem(name, revision)
     return {"rig_json": f"{stem}-cameras.json", "rig_yaml": f"{stem}-cameras.yml",
-            "rig_report": f"{stem}-cameras-report.pdf", "rig_maps": f"{stem}-cameras-rectify-maps.npz"}
+            "rig_report": f"{stem}-cameras-report.pdf", "rig_maps": f"{stem}-cameras-rectify-maps.npz",
+            "rig_example": f"{stem}-cameras-example.py"}
 
 
 def rig_signature(rig) -> str:
