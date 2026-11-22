@@ -114,3 +114,104 @@ def test_a_camera_with_too_few_shared_sets_is_named(charuco, camera):
         calibrate_group(views(charuco, [camera] * 3, [False] * 3, hide={(2, i) for i in range(2, 16)}), charuco)
     with pytest.raises(CalibrationError, match="same number"):
         calibrate_group([[], [None]], charuco)
+
+
+def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
+    pytest.importorskip("PySide6")
+    import os
+    import time
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings, QStandardPaths
+    from PySide6.QtWidgets import QMessageBox
+
+    from plumbline.app import MainWindow, create_app
+    from plumbline.core.project import Project
+
+    QStandardPaths.setTestModeEnabled(True)
+    app = create_app([])
+    QSettings().clear()
+    rng = np.random.default_rng(7)
+    files = []
+    for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 6, 7)):
+        R1 = cv2.Rodrigues(np.asarray(r, np.float64))[0]
+        for c, (R, T) in enumerate(PLACES):
+            files.append(str(tmp_path / f"cam{c + 1}-{i:02d}.png"))
+            cv2.imwrite(files[-1], synth.render(charuco, camera, cv2.Rodrigues(R @ R1)[0].ravel(),
+                                                R @ np.asarray(t, np.float64).ravel() + T, rng))
+
+    def settle(bench):
+        end, quiet = time.time() + 240, 0
+        while time.time() < end and quiet <= 40:
+            app.processEvents()
+            time.sleep(0.02)
+            quiet = 0 if bench._busy() else quiet + 1
+
+    win = MainWindow()
+    win.show()
+    win.new_project()
+    bench = win.bench
+    bench._fill_fields(charuco)
+    bench._target_changed()
+
+    # All images handed over together: three cameras in the file names.
+    bench.add_images(sorted(files, key=lambda p: p[::-1]))
+    assert bench.project.camera_count == 3 and [len(bench.project.paths_of(c)) for c in range(3)] == [6, 6, 6]
+    settle(bench)
+    g = bench.group
+    assert g is not None and bench.rig is None and len(g.sets) == 6
+    assert bench.status.text().startswith("Calibrated 3 cameras from 6 sets")
+    assert len(bench.cam_rows) == len(bench.cam_tabs) == 3 and not bench.places_box.isHidden()
+    assert bench.table.columnCount() == 5 and bench.table.item(0, 3).text() == "3/3"
+    assert bench.images_head.text() == "SETS" and bench.chart.per == "set"
+    for p in g.placed:
+        shift, angle = off(p)
+        assert shift < 1.5 and angle < 0.2
+
+    # The camera next to camera 1 is the one selected last; camera 1's image stays on the left.
+    assert bench.rig_head.text() == "CAMERA 2, SEEN FROM CAMERA 1"
+    bench._select_camera(2)
+    assert bench.rig_head.text() == "CAMERA 3, SEEN FROM CAMERA 1" and bench.result is g.cameras[2]
+    assert bench.table.horizontalHeaderItem(2).text() == "Cam 3"
+    assert bench.rig_values["Apart"].text().startswith(f"{g.placed[1].apart_mm:.2f}")
+    bench._select_camera(0)
+    assert bench.rig_head.text() == "CAMERA 3, SEEN FROM CAMERA 1" and bench.result is g.cameras[0]
+
+    # A set left out, and each camera with its own lens settings.
+    bench._toggle(1)
+    settle(bench)
+    assert bench.group.unused == [1] and bench.table.item(1, 4).text() == "out"
+    bench._toggle(1)
+    bench.own_model.setChecked(True)
+    assert bench.project.options_of(2) is not bench.project.options and bench.result is None
+    bench.run_calibration()
+    settle(bench)
+
+    # Files: one set per camera, two about all of them, and the project opens again with three cameras.
+    out = tmp_path / "out"
+    out.mkdir()
+    bench.export_to(str(out), formats={"json"})
+    name = bench.project.name
+    assert all((out / f"{name}-cam{c}-camera.json").exists() for c in (1, 2, 3))
+    data = json.loads((out / f"{name}-cameras.json").read_text())
+    assert data["camera_count"] == 3 and (out / f"{name}-cameras.yml").exists()
+    assert not list(out.glob("*rectify*")) and not list(out.glob("*cameras-report*"))
+    again = Project.load(str(out / f"{name}.plumbline"))
+    assert again.camera_count == 3 and len(again.detections_of(2)) == 6 and again.more_cameras[0].options is not None
+    win.open_path(str(out / f"{name}.plumbline"))
+    bench = win.bench
+    settle(bench)
+    assert bench.group is not None and len(bench.cam_rows) == 3 and bench.own_model.isChecked()
+
+    # A fourth camera without images is added and taken away again; then camera 3 goes, and two are left.
+    bench._add_camera()
+    assert bench.project.camera_count == 4 and bench._cam == 3 and bench.result is None and len(bench.cam_rows) == 4
+    bench._remove_camera()
+    settle(bench)
+    assert bench.project.camera_count == 3 and bench.group is not None and len(bench.cam_rows) == 3
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    bench._remove_camera()
+    settle(bench)
+    assert bench.project.camera_count == 2 and bench.rig is not None and bench.group is None
+    assert bench.table.columnCount() == 4 and bench.places_box.isHidden() and len(bench.cam_rows) == 2
+    QSettings().setValue("project_counter", 0)

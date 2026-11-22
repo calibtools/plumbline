@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from ..core import export
 from ..core.calibrate import CalibrationResult
-from ..core.naming import export_files, result_signature, rig_files, rig_signature, safe_name
+from ..core.naming import export_files, group_signature, result_signature, rig_files, rig_signature, safe_name
 from ..core.project import Project
 from . import theme as T
 from .widgets import button, frame, label, rule
@@ -32,15 +32,17 @@ KINDS = (
 
 
 class ExportDialog(QDialog):
-    def __init__(self, project: Project, result: CalibrationResult, parent=None, rig=None):
+    def __init__(self, project: Project, result: CalibrationResult, parent=None, rig=None, group=None):
         super().__init__(parent)
         self.setWindowTitle("Export")
         self.setModal(True)
         self.setFixedWidth(640)
         self.setStyleSheet(f"QDialog {{ background: {T.PAPER}; }}")
-        self._project, self._result, self._rig = project, result, rig
-        self._revision = project.revision_for(rig_signature(rig) if rig is not None else result_signature(result))
-        cameras = (rig.first, rig.second) if rig is not None else (result,)
+        self._project, self._result, self._rig, self._group = project, result, rig, group
+        self._several = rig is not None or group is not None
+        self._revision = project.revision_for(rig_signature(rig) if rig is not None else group_signature(group)
+                                              if group is not None else result_signature(result))
+        cameras = (rig.first, rig.second) if rig is not None else group.cameras if group is not None else (result,)
         self._ros = all(export.ros_distortion_model(c) is not None for c in cameras)
 
         v = QVBoxLayout(self)
@@ -169,10 +171,13 @@ class ExportDialog(QDialog):
 
     def file_names(self) -> dict[str, str]:
         """The files to be written. With two cameras: camera 1's names, and the two files about both."""
-        files = export_files(self.project_name, self._revision, 1 if self._rig is not None else None)
+        files = export_files(self.project_name, self._revision, 1 if self._several else None)
         chosen = {k: v for k, v in files.items() if k in self.formats()}
         if self._rig is not None:
             chosen.update(rig_files(self.project_name, self._revision))
+        elif self._group is not None:      # three or more cameras: the two files about all of them
+            both = rig_files(self.project_name, self._revision)
+            chosen.update({k: both[k] for k in ("rig_json", "rig_yaml")})
         return chosen
 
     @property
@@ -204,7 +209,7 @@ class ExportDialog(QDialog):
         if self._checks["example"].isChecked() and not self._checks["opencv_yaml"].isChecked():
             self._checks["opencv_yaml"].setChecked(True)  # the example reads this file
             return
-        files = export_files(self.project_name, self._revision, 1 if self._rig is not None else None)
+        files = export_files(self.project_name, self._revision, 1 if self._several else None)
         files["project"] = export_files(self.project_name, self._revision)["project"]
         folder = Path(self.folder) if self.folder else None
         folder_ok = bool(folder and folder.is_dir())
@@ -236,6 +241,13 @@ class ExportDialog(QDialog):
                 f"for cam2. {both['rig_json']} and {both['rig_yaml']} say how camera 2 sits relative to camera 1; "
                 "with the report ticked, one more report covers both cameras; with the lookup tables or the "
                 "example ticked, one more file lines the two images up row by row.")
+        if self._group is not None:
+            both = rig_files(self.project_name, self._revision)
+            k = len(self._group.cameras)
+            self.revision_note.setText(
+                self.revision_note.text() + f" {k} cameras: the files ticked below are written once for each camera, "
+                f"cam1 to cam{k}. {both['rig_json']} and {both['rig_yaml']} say where each camera sits relative to "
+                "camera 1. A report covering all cameras and row-aligned images are written for two cameras only.")
         notes = []
         if changed:
             notes.append(f"Characters that cannot be in a file name were removed: {self.project_name}.")
