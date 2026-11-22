@@ -1525,13 +1525,22 @@ class Workbench(QWidget):
                 val.setText("–")
             self.rig_note.setText("Where camera 2 sits and how far it is turned, measured from camera 1.")
             return
-        x, y, z = rig.position
-        texts = (f"{rig.apart_mm:.2f} mm", f"{rig.turned_deg:.2f}°", f"{x:.2f}", f"{y:.2f}", f"{z:.2f}")
+        known = bool(np.isfinite(rig.apart_std_mm))
+        (x, y, z), spread = rig.position, rig.position_std
+
+        def pm(value: float, sd: float, digits: int = 2) -> str:
+            if not (known and np.isfinite(sd)):
+                return f"{value:.{digits}f}"
+            fine = digits if round(sd, digits) > 0 else digits + 1     # never "± 0.00"
+            return f"{value:.{digits}f} ± {sd:.{fine}f}"
+
+        texts = (pm(rig.apart_mm, rig.apart_std_mm) + " mm", pm(rig.turned_deg, rig.turned_std_deg, 3) + "°",
+                 pm(x, spread[0]), pm(y, spread[1]), pm(z, spread[2]))
         for k, text in zip(self.rig_keys, texts):
             self.rig_values[k].setText(text)
         note = "Where camera 2 sits and how far it is turned, measured from camera 1."
-        if np.isfinite(rig.apart_std_mm):
-            note += f" ± one standard deviation: apart {rig.apart_std_mm:.2f} mm · turned {rig.turned_std_deg:.3f}°"
+        if known:
+            note += " ± is one standard deviation."
         self.rig_note.setText(note)
 
     @staticmethod

@@ -40,6 +40,7 @@ class RigResult:
     pairs: list[PairResult]
     unpaired: list[int]        # pairs where one side has no usable detection, or the user excluded it
     std: np.ndarray = field(default_factory=lambda: np.full(6, np.nan))  # rotation vector (rad), translation (mm)
+    position_std: np.ndarray = field(default_factory=lambda: np.full(3, np.nan))  # of camera 2's position, mm
     apart_std_mm: float = float("nan")
     turned_std_deg: float = float("nan")
 
@@ -63,6 +64,7 @@ class RigResult:
             "camera_2_position_mm": [float(v) for v in self.position],
             "apart_mm": self.apart_mm,
             "turned_deg": self.turned_deg,
+            "camera_2_position_std_mm": [float(v) for v in self.position_std],
             "apart_std_mm": self.apart_std_mm,
             "turned_std_deg": self.turned_std_deg,
             "rms_point": self.rms_point,
@@ -258,4 +260,14 @@ def calibrate_pair(
         out.apart_std_mm = float(np.sqrt(unit @ cov[3:, 3:] @ unit))
         axis = rig[:3] / max(np.linalg.norm(rig[:3]), 1e-12)
         out.turned_std_deg = float(np.rad2deg(np.sqrt(axis @ cov[:3, :3] @ axis)))
+        # Where camera 2 sits, -R' T, depends on the rotation too: its spread comes from all six numbers.
+        def place(v):
+            return -_rot(v[:3]).T @ v[3:]
+
+        J = np.empty((3, 6))
+        for c in range(6):
+            d = np.zeros(6)
+            d[c] = 1e-6 * max(1.0, abs(rig[c]))
+            J[:, c] = (place(rig + d) - place(rig - d)) / (2 * d[c])
+        out.position_std = np.sqrt(np.clip(np.diag(J @ cov @ J.T), 0, None))
     return out
