@@ -65,6 +65,14 @@ def write_xlsx(
         ("cy, px", r.cy, "0.0000"),
     ]
     rows += [(name, float(value), "0.000000000") for name, value in zip(r.distortion_names, r.distortion)]
+    if r.uncertainty is not None:
+        u = r.uncertainty
+        rows.append(("Point noise per coordinate, px (from the residuals)", u.noise_px, "0.0000"))
+        for name in ("fx", "fy", "cx", "cy", *r.distortion_names):
+            sd = u.std_of(name)
+            if sd is not None:
+                rows.append((f"{name}, one standard deviation", sd, "0.0000" if name in ("fx", "fy", "cx", "cy")
+                             else "0.000000000"))
     rows += [
         ("Software", f"Plumbline {__version__} by Calib.Tools, OpenCV {r.opencv_version}", None),
         ("Website", "https://calib.tools", None),

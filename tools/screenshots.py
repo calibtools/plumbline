@@ -66,6 +66,10 @@ def main():
     bench.view.corrected_btn.setChecked(True)
     pump(app, 0.3)
     win.grab().save(str(out / "05-corrected.png"))
+    bench._show_map(1)
+    pump(app, 0.2)
+    win.grab().save(str(out / "05b-uncertainty-map.png"))
+    bench._show_map(0)
     bench.view.corrected_btn.setChecked(False)
 
     # A wide lens, fitted with the fisheye model.
@@ -98,6 +102,10 @@ def main():
     win.grab().save(str(out / "07-fisheye-result.png"))
     r = bench.result
     print("FISHEYE views", len(r.views), "rms", round(r.rms_point, 4), "fx", round(r.fx, 2), "dist", np.round(r.distortion, 5))
+    bench._show_map(1)
+    pump(app, 0.2)
+    win.grab().save(str(out / "07b-fisheye-uncertainty.png"))
+    bench._show_map(0)
     bench.view.corrected_btn.setChecked(True)
     pump(app, 0.3)
     win.grab().save(str(out / "08-fisheye-corrected.png"))

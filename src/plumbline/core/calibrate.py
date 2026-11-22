@@ -81,6 +81,8 @@ class CalibrationResult:
     excluded: list[int] = field(default_factory=list)
     skipped: list[int] = field(default_factory=list)
     opencv_version: str = cv2.__version__
+    uncertainty: "object | None" = None  # core.uncertainty.Uncertainty; None when it cannot be worked out
+    projection: "object | None" = None   # core.uncertainty.ProjectionUncertainty across the image, or None
 
     @property
     def rms_coordinate(self) -> float:
@@ -230,7 +232,20 @@ def calibrate(
             f"({rms_point:.6f}) differs from OpenCV's ({float(rms):.6f})."
         )
 
+    from .uncertainty import parameter_uncertainty, projection_uncertainty  # here to avoid a circular import
+
+    uncertainty = parameter_uncertainty(
+        K, dist, options, [(obj, v.rvec, v.tvec, v.residuals) for obj, v in zip(obj_pts, views)]
+    )
+    projection = None
+    if uncertainty is not None:
+        try:
+            projection = projection_uncertainty(K, dist, options, uncertainty, size[0], size[1])
+        except (cv2.error, np.linalg.LinAlgError, ValueError):
+            projection = None  # the parameters still stand; only the map is left out
     return CalibrationResult(
+        uncertainty=uncertainty,
+        projection=projection,
         image_width=size[0],
         image_height=size[1],
         camera_matrix=np.asarray(K, np.float64),

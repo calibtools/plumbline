@@ -9,7 +9,7 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QSpinBox,
+    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -129,7 +129,11 @@ class Workbench(QWidget):
         h.addWidget(home)
         h.addSpacing(16)
         self.steps = [StepButton(t) for t in ("1 Target", "2 Images", "3 Detect", "4 Calibrate", "5 Export")]
-        self.steps[0].setMinimumWidth(168)  # room for a part number such as CT-APR-P-800X600-T36
+        # The first step shows the part number and needs room for one such as CT-APR-P-800X600-T36;
+        # the others give up a little so that the header still fits a 1360 px window.
+        self.steps[0].setFixedWidth(168)
+        for s in self.steps[1:]:
+            s.setFixedWidth(144)
         actions = (self._goto_target, self.add_images, self.run_detection, self.run_calibration, self.export_all)
         for s, act in zip(self.steps, actions):
             s.clicked.connect(act)
@@ -237,13 +241,38 @@ class Workbench(QWidget):
         b.addLayout(left, 1)
         right = QVBoxLayout()
         right.setSpacing(6)
-        right.addWidget(label("COVERAGE", "eyebrow"))
+        heads = QHBoxLayout()
+        heads.setSpacing(14)
+        self.map_tabs = []
+        for text, tip in (("COVERAGE", "Where in the image the detected points fell"),
+                          ("UNCERTAINTY", "How well the result is pinned down across the image")):
+            b_ = QPushButton(text)
+            b_.setCursor(Qt.CursorShape.PointingHandCursor)
+            b_.setToolTip(tip)
+            b_.setCheckable(True)
+            b_.clicked.connect(lambda _on, which=len(self.map_tabs): self._show_map(which))
+            heads.addWidget(b_)
+            self.map_tabs.append(b_)
+        heads.addStretch(1)
+        right.addLayout(heads)
         self.coverage = CoverageMap()
         right.addWidget(self.coverage)
+        self._show_map(0)
         right.addStretch(1)
         b.addLayout(right)
         v.addWidget(bottom)
         return w
+
+    def _show_map(self, which: int) -> None:
+        """Switch the small map between point coverage and projection uncertainty."""
+        for i, b_ in enumerate(self.map_tabs):
+            b_.setChecked(i == which)
+            ink = T.INK if i == which else T.INK_MUTED
+            b_.setStyleSheet(
+                f'border: 0; border-bottom: 2px solid {T.INK if i == which else "transparent"}; '
+                f'background: transparent; padding: 0 0 2px 0; min-height: 0; color: {ink}; '
+                f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
+        self.coverage.set_mode(which == 1)
 
     def _right(self) -> QWidget:
         w = QWidget()
@@ -397,6 +426,11 @@ class Workbench(QWidget):
         v.addWidget(label("INTRINSICS, PX", "eyebrow"))
         self.intr = self._kv_grid(("fx", "fy", "cx", "cy"))
         v.addWidget(self.intr[0])
+        self.intr_note = label("", "small", wrap=True)
+        self.intr_note.setToolTip(
+            "One standard deviation, worked out from the scatter of the detected points. It does not cover "
+            "a board that is not flat or not the size entered, or a lens model that does not fit the lens.")
+        v.addWidget(self.intr_note)
         v.addSpacing(8)
         v.addWidget(label("DISTORTION", "eyebrow"))
         self.dist_box = frame("sheet")
@@ -411,7 +445,14 @@ class Workbench(QWidget):
         self.findings.setSpacing(6)
         v.addLayout(self.findings)
         v.addStretch(1)
-        return w
+        # Many lens terms and several findings do not fit a small window; the panel scrolls then.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        scroll.setWidget(w)
+        return scroll
 
     def _kv_grid(self, keys):
         box = frame("sheet")
@@ -909,6 +950,8 @@ class Workbench(QWidget):
             share = 0.0
             self.coverage.set_grid(None)
         self._refresh_chart()
+        res = self.result
+        self.coverage.set_uncertainty(res.projection.sd if res is not None and res.projection is not None else None)
 
         # Header steps.
         t = p.target
@@ -931,6 +974,7 @@ class Workbench(QWidget):
             self.used_note.setText("No result yet.")
             for val in self.intr[1].values():
                 val.setText("–")
+            self.intr_note.setText("")
             self._fill_dist([])
             self._fill_findings([])
             return
@@ -945,7 +989,14 @@ class Workbench(QWidget):
         )
         for k, val in zip(("fx", "fy", "cx", "cy"), (r.fx, r.fy, r.cx, r.cy)):
             self.intr[1][k].setText(f"{val:.2f}")
-        self._fill_dist(list(zip(r.distortion_names, r.distortion)))
+        u = r.uncertainty
+        if u is None:
+            self.intr_note.setText("")
+        else:
+            parts = [f"{k} {u.std_of(k):.2f}" for k in ("fx", "fy", "cx", "cy") if u.std_of(k) is not None]
+            self.intr_note.setText("± one standard deviation, px: " + " · ".join(parts))
+        self._fill_dist(list(zip(r.distortion_names, r.distortion)),
+                        {k: u.std_of(k) for k in r.distortion_names} if u is not None else {})
         self._fill_findings(self._make_findings(r, share))
 
     @staticmethod
@@ -962,7 +1013,8 @@ class Workbench(QWidget):
             elif item.layout() is not None:
                 Workbench._clear(item.layout())
 
-    def _fill_dist(self, pairs):
+    def _fill_dist(self, pairs, spread=None):
+        spread = spread or {}
         lay = self.dist_layout
         self._clear(lay)
         if not pairs:
@@ -971,7 +1023,10 @@ class Workbench(QWidget):
         for i, (k, val) in enumerate(pairs):
             row, col = divmod(i, 2)
             lay.addWidget(label(k, font=T.mono(13), color=T.INK_MUTED), row, col * 2)
-            lay.addWidget(label(f"{val:.5f}", font=T.mono(13, 600)), row, col * 2 + 1, Qt.AlignmentFlag.AlignRight)
+            cell = label(f"{val:.5f}", font=T.mono(13, 600))
+            if spread.get(k) is not None:
+                cell.setToolTip(f"{k} = {val:.6f} ± {spread[k]:.6f} (one standard deviation)")
+            lay.addWidget(cell, row, col * 2 + 1, Qt.AlignmentFlag.AlignRight)
         lay.setColumnStretch(1, 1)
         lay.setColumnStretch(3, 1)
         lay.setColumnMinimumWidth(2, 28)

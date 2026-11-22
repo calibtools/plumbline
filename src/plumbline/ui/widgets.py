@@ -179,7 +179,7 @@ class ErrorChart(QWidget):
         p.drawLine(QPointF(plot.left(), plot.bottom()), QPointF(plot.right(), plot.bottom()))
         p.setPen(QColor(T.INK_MUTED))
         p.drawText(QRectF(plot.left(), h - 18, plot.width(), 16), Qt.AlignmentFlag.AlignLeft,
-                   "px per image, RMS per point · click a bar to exclude or restore it")
+                   "px per image · click a bar to exclude or restore it")
 
     def _hit(self, pos) -> int | None:
         for r, idx in self._rects:
@@ -220,15 +220,59 @@ class CoverageMap(QWidget):
         self.setFixedSize(244, 170)
         self._grid: np.ndarray | None = None
         self._share = 0.0
+        self._spread: np.ndarray | None = None
+        self.show_uncertainty = False
 
     def set_grid(self, grid: np.ndarray | None, share: float = 0.0):
         self._grid, self._share = grid, share
         self.update()
 
+    def set_uncertainty(self, sd: np.ndarray | None):
+        """Projection uncertainty per cell in px (one standard deviation), or None."""
+        self._spread = sd
+        self.update()
+
+    def set_mode(self, uncertainty: bool):
+        self.show_uncertainty = uncertainty
+        self.setToolTip(
+            "How far a viewing direction may land from where the result puts it, one standard deviation.\n"
+            "Light: under 0.05 px. Mid: under 0.2 px. Dark: under 0.5 px. Red: 0.5 px and more.\n"
+            "From the scatter of the detected points; a slight turn of the whole camera is not counted."
+            if uncertainty else "")
+        self.update()
+
+    def _paint_uncertainty(self, p: QPainter, area: QRectF):
+        sd = self._spread
+        if sd is None:
+            p.setPen(QPen(QColor(T.HAIRLINE), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
+            p.setPen(QColor(T.INK_SOFT))
+            p.drawText(area, Qt.AlignmentFlag.AlignCenter, "No result yet")
+            return
+        rows, cols = sd.shape
+        cw, ch = area.width() / cols, area.height() / rows
+        for r in range(rows):
+            for c in range(cols):
+                v = float(sd[r, c])
+                if not np.isfinite(v):
+                    continue  # outside what the lens model reaches
+                shade = (T.HAIRLINE if v < 0.05 else T.LINE_STRONG if v < 0.2
+                         else T.INK if v < 0.5 else T.RED_TEXT)
+                p.setPen(QPen(QColor(shade), 1))
+                p.setBrush(QColor(shade))
+                p.drawRect(QRectF(c * cw + 1, r * ch + 1, cw - 2, ch - 2))
+        p.setPen(QColor(T.INK_MUTED))
+        p.drawText(QRectF(0, 154, 244, 16), Qt.AlignmentFlag.AlignLeft,
+                   f"typical ±{np.nanmedian(sd):.2f} px · worst ±{np.nanmax(sd):.2f} px")
+
     def paintEvent(self, _e):
         p = QPainter(self)
         p.setFont(T.mono(11))
         area = QRectF(0, 0, 240, 150)
+        if self.show_uncertainty:
+            self._paint_uncertainty(p, area)
+            return
         if self._grid is None:
             p.setPen(QPen(QColor(T.HAIRLINE), 1))
             p.drawRect(area.adjusted(0.5, 0.5, -0.5, -0.5))
