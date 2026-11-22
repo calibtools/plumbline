@@ -53,3 +53,65 @@ def test_points_are_placed_where_they_are(charuco, camera):
     assert np.abs(pts - truth[common]).max() < 0.05 and gap.max() < 0.01
     with pytest.raises(ValueError):
         check_pairs(rig, [Detection("a", 10, 10)], [Detection("b", 10, 10)], charuco)
+
+
+def test_the_check_in_the_window(tmp_path, charuco, camera):
+    pytest.importorskip("PySide6")
+    import os
+    import time
+
+    import cv2
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings, QStandardPaths
+
+    from plumbline.app import MainWindow, create_app
+
+    QStandardPaths.setTestModeEnabled(True)
+    app = create_app([])
+    QSettings().clear()
+    rng = np.random.default_rng(7)
+    files = []
+    for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 10, 7)):
+        for name, pose in (("cam1", (r, t)), ("cam2", second_pose(r, t))):
+            files.append(str(tmp_path / f"{name}-{i:02d}.png"))
+            cv2.imwrite(files[-1], synth.render(charuco, camera, pose[0], pose[1], rng))
+    used, held = files[:14], files[14:]
+
+    def settle(bench):
+        end, quiet = time.time() + 240, 0
+        while time.time() < end and quiet <= 40:
+            app.processEvents()
+            time.sleep(0.02)
+            quiet = 0 if bench._busy() else quiet + 1
+
+    win = MainWindow()
+    win.show()
+    win.new_project()
+    bench = win.bench
+    bench._fill_fields(charuco)
+    bench._target_changed()
+    assert bench.check_part.isHidden()
+    bench.add_images(used)
+    settle(bench)
+    assert bench.rig is not None and not bench.check_part.isHidden() and bench.check_box.isHidden()
+
+    # Images of the calibration itself are refused; images named another way are not guessed at.
+    bench.check_with(used[:4])
+    assert bench.check is None and "took no part" in bench.status.text()
+    bench.check_with([str(tmp_path / f"{side}_{i}.png") for side in ("left", "right") for i in range(3)])
+    assert bench.check is None and "cam1 / cam2" not in bench.status.text() and "1 / 2" in bench.status.text()
+
+    bench.check_with(held + used[:2])
+    settle(bench)
+    c = bench.check
+    assert c is not None and len(c.pairs) + len(c.skipped) == 3 and abs(c.scale - 1) < 0.003
+    assert not bench.check_box.isHidden() and bench.check_values["Pairs"].text().startswith(f"{len(c.pairs)} used")
+    assert bench.status.text().endswith("2 images of the calibration left out.")
+    rig = bench.rig
+
+    # The check belongs to the result it was made with: a new calibration clears it.
+    bench._toggle(0)
+    settle(bench)
+    assert bench.rig is not rig and bench.check is None and bench.check_box.isHidden()
+    QSettings().setValue("project_counter", 0)
