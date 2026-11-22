@@ -23,6 +23,8 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Calib.Tools boards by part number: pick one and the pattern settings fill in
 - Project files, built-in sample images
 
+In progress: two cameras. The solve is in `plumbline.core.rig` (how the second camera sits relative to the first, with ± on distance and angle); the window does not show it yet.
+
 Not yet: signed installers, other wide-lens models, uncertainty, several cameras.
 
 Every result so far has been checked with rendered images only. Checks with photographs of real boards are still to come.
