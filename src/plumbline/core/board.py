@@ -23,6 +23,7 @@ from . import lens
 MIN_VIEWS_PER_POINT = 4     # a point in fewer images keeps its nominal place
 CLEARLY_BETTER = 0.9        # error must fall below this share of what extra freedom alone would give
 MIN_SHAPE_MM = 0.05         # and the shape found must be at least this far from nominal somewhere
+SPREAD = 0.2                # the median change of a point, as a share of the largest, for the whole board to be meant
 
 
 @dataclass
@@ -53,6 +54,16 @@ class BoardShape:
         """The images fit a shaped board better than extra freedom alone explains."""
         fits = self.rms_released < CLEARLY_BETTER * self.expected_ratio * self.rms_nominal
         return fits and max(self.out_of_flat_mm, self.in_plane_mm) >= MIN_SHAPE_MM
+
+    @property
+    def whole_board(self) -> bool:
+        """The change is spread over the board, not held by a few points.
+
+        One misplaced point also makes the images fit a changed board better; that is
+        a matter for the point statistics, which name the point.
+        """
+        d = np.linalg.norm(self.deviation[self.estimated], axis=1)
+        return bool(d.size) and float(np.median(d)) >= SPREAD * float(d.max())
 
     def to_dict(self) -> dict:
         return {

@@ -85,7 +85,7 @@ def point_statistics(result: "CalibrationResult", detections: list[Detection]) -
 
 
 def trusted_suspects(result: "CalibrationResult") -> list[int]:
-    """Misplaced board points, unless the lens model itself does not fit.
+    """Misplaced board points, unless the lens model does not fit or the whole board looks shaped.
 
     A lens model that cannot follow the lens also leaves some points off the same
     way in every image. Then the model is the thing to fix first, and no board
@@ -95,4 +95,7 @@ def trusted_suspects(result: "CalibrationResult") -> list[int]:
         return []
     if result.pattern is not None and result.pattern.has_pattern:
         return []
+    board = result.board
+    if board is not None and board.clearly_better and board.whole_board and not result.options.release_board:
+        return []  # the whole board looks shaped: that finding says it, single points are not picked out
     return result.points.suspects()

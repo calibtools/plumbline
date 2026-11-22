@@ -52,7 +52,7 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
         if not board.settled:
             out.append((CHECK, "The estimate of the board's shape was still moving when it was stopped. "
                                "Treat this result with care; more images of the whole board help."))
-    elif board is not None and board.clearly_better and not misfit:
+    elif board is not None and board.clearly_better and board.whole_board and not misfit:
         flat = (f"about {board.out_of_flat_mm:.1f} mm out of flat" if board.out_of_flat_mm >= 0.1
                 else "not quite the shape entered")
         out.append((CHECK, f"These images fit clearly better if the board is {flat} "

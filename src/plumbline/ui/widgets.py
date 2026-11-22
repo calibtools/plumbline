@@ -411,7 +411,7 @@ class ImageView(QWidget):
 
     def set_image(self, gray: np.ndarray | None, corners: np.ndarray, residuals: np.ndarray | None, caption: str):
         if gray is None:
-            self.set_message("This image could not be read")
+            self.set_message("This image could not be read.\n\nIt may have been moved or renamed since it was added.")
             return
         h, w = gray.shape[:2]
         img = QImage(np.ascontiguousarray(gray).data, w, h, w, QImage.Format.Format_Grayscale8).copy()

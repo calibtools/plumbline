@@ -38,6 +38,9 @@ def test_a_misplaced_point_is_found_and_measured(charuco, camera):
     text = next(t for tag, t in findings(result, 0.9) if tag == CHECK and "off the same way" in t)
     x, y = charuco.object_points()[37][:2]
     assert f"{x:g} mm across and {y:g} mm down" in text and "0.3" in text
+    # One point is not taken for a board that is out of shape as a whole.
+    assert result.board.clearly_better and not result.board.whole_board
+    assert not any("fit clearly better" in t for _tag, t in findings(result, 0.9))
 
 
 def test_a_sound_board_raises_no_alarm(charuco, camera, charuco_set):

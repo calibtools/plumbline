@@ -10,6 +10,7 @@ from plumbline.core.board import keep_place_and_size
 from plumbline.core.calibrate import ModelOptions, calibrate
 from plumbline.core.detect import Detection
 from plumbline.core.findings import CHECK, NOTE, findings
+from plumbline.core.points import trusted_suspects
 
 
 def shaped(target, sag_mm=0.0, stretch_x=0.0):
@@ -54,6 +55,7 @@ def test_a_sagging_board_is_noticed_and_estimated(wide, charuco, camera, fisheye
     flat = calibrate(dets, charuco, options)
     assert abs(flat.fx - f) > 4 and flat.rms_point < 0.5
     assert flat.board.clearly_better
+    assert not trusted_suspects(flat)            # the board as a whole is named, not single points
     text = next(t for tag, t in findings(flat, 0.9) if tag == CHECK and "out of flat" in t)
     assert "Estimate the shape of the board" in text and "1.4 mm" in text or "1.5 mm" in text
 
@@ -178,4 +180,41 @@ def test_board_option_in_the_window(tmp_path, charuco, charuco_set):
     assert win.bench.opt_board.isChecked()
     win.new_project()
     assert not win.bench.opt_board.isChecked()   # a new project starts with the board as entered
+    QSettings().setValue("project_counter", 0)
+
+
+def test_images_that_are_gone_do_not_break_the_window(tmp_path, charuco, camera):
+    """A project whose image files were moved still calibrates from its saved detections."""
+    pytest.importorskip("PySide6")
+    import os
+    import time
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings, QStandardPaths
+
+    from plumbline.app import MainWindow, create_app
+    from plumbline.core.detect import detect_file, read_gray
+
+    missing = str(tmp_path / "gone.png")
+    assert read_gray(missing) is None and not detect_file(missing, charuco).usable
+
+    QStandardPaths.setTestModeEnabled(True)
+    app = create_app([])
+    QSettings().clear()
+    dets = views(charuco, shaped(charuco), camera, count=12)
+    win = MainWindow()
+    win.show()
+    win.new_project()
+    bench = win.bench
+    bench._fill_fields(charuco)
+    bench._target_changed()
+    bench.project.image_paths = [str(tmp_path / d.path) for d in dets]
+    bench.project.detections = dets
+    bench.run_calibration()
+    end, quiet = time.time() + 120, 0
+    while time.time() < end and quiet <= 40:
+        app.processEvents()
+        time.sleep(0.02)
+        quiet = 0 if bench._busy() else quiet + 1
+    assert bench.result is not None and bench.rms_big.text() != "–"
     QSettings().setValue("project_counter", 0)
