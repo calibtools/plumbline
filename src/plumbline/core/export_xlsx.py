@@ -129,6 +129,27 @@ def write_xlsx(
             cell.number_format = PX
     wc.auto_filter.ref = f"A1:G{wc.max_row}"
 
+    # ---- Board points: each point of the board across all the images it was used in.
+    if r.points is not None:
+        st = r.points
+        obj = r.target.object_points()
+        from .points import trusted_suspects
+
+        flagged = set(trusted_suspects(r))
+        wp = wb.create_sheet("Board points")
+        _header(wp, ["Point ID", "x on board, mm", "y on board, mm", "Images", "RMS, px", "Mean dx, px",
+                     "Mean dy, px", "Offset x, mm", "Offset y, mm", "Note"],
+                [10, 15, 15, 9, 10, 12, 12, 13, 13, 30])
+        for i, pid in enumerate(st.ids.tolist()):
+            wp.append([int(pid), float(obj[pid][0]), float(obj[pid][1]), int(st.count[i]), float(st.rms_px[i]),
+                       float(st.mean_px[i][0]), float(st.mean_px[i][1]),
+                       float(st.offset_mm[i][0]), float(st.offset_mm[i][1]),
+                       "off the same way in every image" if i in flagged else ""])
+        for row in wp.iter_rows(min_row=2, min_col=5, max_col=9):
+            for cell in row:
+                cell.number_format = PX
+        wp.auto_filter.ref = f"A1:J{wp.max_row}"
+
     wb.properties.title = f"{project_name} calibration, revision {revision}"
     wb.properties.creator = f"Plumbline {__version__} by Calib.Tools"
     wb.save(str(path))

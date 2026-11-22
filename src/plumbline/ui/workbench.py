@@ -22,6 +22,7 @@ from ..core.calibrate import (
 from ..core.detect import Detection, detect_file, read_gray
 from ..core.naming import export_files, result_signature, safe_name
 from ..core.export_code import write_example, write_maps
+from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
 from ..core.project import SUFFIX, Project
@@ -45,6 +46,7 @@ class StepButton(QPushButton):
     def __init__(self, title: str):
         super().__init__()
         self._title = title
+        self._full = ""
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(40)
         self.setMinimumWidth(150)
@@ -70,12 +72,19 @@ class StepButton(QPushButton):
         )
         self._name.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 13px; font-weight: 600; color: {ink};')
         self._status.setStyleSheet(f"font-size: 11px; color: {sub};")
-        # A long part number is cut with an ellipsis, never mid-letter; the full text is in the tooltip.
+        self._full = status
+        self._fit()
+
+    def _fit(self) -> None:
+        """A text that does not fit is cut with an ellipsis, never mid-letter; the tooltip has all of it."""
         room = max(40, self.width() - 22)
-        shown = self._status.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, room)
-        self.setToolTip(status if shown != status else "")
-        status = shown
-        self._status.setText(status)
+        shown = self._status.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, room)
+        self.setToolTip(self._full if shown != self._full else "")
+        self._status.setText(shown)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
 
 
 class Workbench(QWidget):
@@ -131,9 +140,10 @@ class Workbench(QWidget):
         self.steps = [StepButton(t) for t in ("1 Target", "2 Images", "3 Detect", "4 Calibrate", "5 Export")]
         # The first step shows the part number and needs room for one such as CT-APR-P-800X600-T36;
         # the others give up a little so that the header still fits a 1360 px window.
-        self.steps[0].setFixedWidth(168)
+        self.steps[0].setFixedWidth(164)
         for s in self.steps[1:]:
-            s.setFixedWidth(144)
+            s.setMinimumWidth(126)   # they narrow when a long project name needs the room
+            s.setMaximumWidth(140)
         actions = (self._goto_target, self.add_images, self.run_detection, self.run_calibration, self.export_all)
         for s, act in zip(self.steps, actions):
             s.clicked.connect(act)
@@ -242,10 +252,11 @@ class Workbench(QWidget):
         right = QVBoxLayout()
         right.setSpacing(6)
         heads = QHBoxLayout()
-        heads.setSpacing(14)
+        heads.setSpacing(12)
         self.map_tabs = []
         for text, tip in (("COVERAGE", "Where in the image the detected points fell"),
-                          ("UNCERTAINTY", "How well the result is pinned down across the image")):
+                          ("UNCERTAINTY", "How well the result is pinned down across the image"),
+                          ("RESIDUALS", "What is left over after the fit, across the image")):
             b_ = QPushButton(text)
             b_.setCursor(Qt.CursorShape.PointingHandCursor)
             b_.setToolTip(tip)
@@ -272,7 +283,7 @@ class Workbench(QWidget):
                 f'border: 0; border-bottom: 2px solid {T.INK if i == which else "transparent"}; '
                 f'background: transparent; padding: 0 0 2px 0; min-height: 0; color: {ink}; '
                 f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500;')
-        self.coverage.set_mode(which == 1)
+        self.coverage.set_mode(which == 1, residuals=which == 2)
 
     def _right(self) -> QWidget:
         w = QWidget()
@@ -326,6 +337,8 @@ class Workbench(QWidget):
             s.setDecimals(3)
             s.setSuffix(" mm")
             s.setValue(val)
+        self.marker.setMinimum(0.0)  # 0 stands for "not known" where the field is optional (circle diameter)
+        self.marker.setSpecialValueText("not set")
         self.first_id = QSpinBox()
         self.first_id.setRange(0, 9999)
         self.first_id.setToolTip("Boards in a set often continue the numbering: board 2 starts where board 1 ends.")
@@ -502,6 +515,8 @@ class Workbench(QWidget):
         self.sx.setValue(t.squares_x)
         self.sy.setValue(t.squares_y)
         self.square.setValue(t.square_mm)
+        if t.is_circles:
+            self.marker.setValue(t.marker_mm or 0.0)
         if t.kind in (CHARUCO, *MARKER_GRIDS):
             self.marker.setValue(t.marker_mm)
             self.dictionary.setCurrentText(t.dictionary)
@@ -522,6 +537,9 @@ class Workbench(QWidget):
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
                                 self.marker.value(), self.dictionary.currentText(),
                                 first_marker_id=self.first_id.value())
+            elif kind in (CIRCLES, ASYMMETRIC_CIRCLES):
+                target = Target(kind, self.sx.value(), self.sy.value(), self.square.value(),
+                                self.marker.value() or None)
             else:
                 target = Target(kind, self.sx.value(), self.sy.value(), self.square.value())
             # The part number stays only while the fields still describe that board.
@@ -552,8 +570,24 @@ class Workbench(QWidget):
                 self.dictionary.blockSignals(True)
                 self.dictionary.setCurrentText("DICT_APRILTAG_36h11" if kind == APRILGRID else "DICT_5X5_250")
                 self.dictionary.blockSignals(False)
+        circles = kind in (CIRCLES, ASYMMETRIC_CIRCLES)
+        if kind != self._last_kind:
+            # The same field holds a marker size, a gap or a circle diameter; do not carry one over as another.
+            was_circles = self._last_kind in (CIRCLES, ASYMMETRIC_CIRCLES)
+            fresh = None
+            if circles and not was_circles:
+                fresh = 0.0
+            elif kind == CHARUCO and self._last_kind != CHARUCO:
+                fresh = round(0.75 * self.square.value(), 3)
+            elif kind in MARKER_GRIDS and self._last_kind not in MARKER_GRIDS:
+                fresh = round(0.3 * self.square.value(), 3)
+            if fresh is not None:
+                self.marker.blockSignals(True)
+                self.marker.setValue(fresh)
+                self.marker.blockSignals(False)
         self._last_kind = kind
-        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap"}.get(kind, "Marker size"))
+        self.marker_label.setText({APRILGRID: "Tag gap", ARUCO_GRID: "Marker gap", CIRCLES: "Circle diameter",
+                                   ASYMMETRIC_CIRCLES: "Circle diameter"}.get(kind, "Marker size"))
         self.first_id_label.setText("First tag ID" if kind == APRILGRID else "First marker ID")
         if kind == ARUCO_GRID:
             names = ("Markers across", "Markers down", "Marker size")
@@ -567,20 +601,23 @@ class Workbench(QWidget):
                     "Part of the grid in the image is enough.")
         elif kind == CIRCLES:
             names = ("Circles across", "Circles down", "Spacing")
-            note = "For any other board: count the circles, and measure from the centre of one to the centre of the next."
+            note = ("For any other board: count the circles, and measure from the centre of one to the centre "
+                    "of the next. With the diameter entered, the centres are corrected for perspective.")
         elif kind == ASYMMETRIC_CIRCLES:
             names = ("Columns", "Rows", "Lattice spacing")
             note = ("Columns and rows count the positions of the square lattice the circles sit on; "
-                    "every other position holds a circle. The whole grid must be in every image.")
+                    "every other position holds a circle. The whole grid must be in every image. "
+                    "With the diameter entered, the centres are corrected for perspective.")
         else:
             names = ("Squares across", "Squares down", "Square size")
             note = "For any other board: count squares, not inner corners, and measure one square."
         for wdg, text in zip((self.sx_label, self.sy_label, self.square_label), names):
             wdg.setText(text)
         self.target_note.setText(note)
-        for wdg in (self.marker, self.dictionary, self.marker_label, self.dict_label,
-                    self.first_id, self.first_id_label):
+        for wdg in (self.dictionary, self.dict_label, self.first_id, self.first_id_label):
             wdg.setVisible(tags)
+        for wdg in (self.marker, self.marker_label):
+            wdg.setVisible(tags or circles)
         self.legacy.setVisible(charuco)
         target = self.current_target()
         board = find_board(target.part_number) if target is not None else None
@@ -875,6 +912,12 @@ class Workbench(QWidget):
             residuals = None
             caption = caption.replace(f" · residuals ×{RESIDUAL_GAIN}", "") + " · corrected view"
         self.view.set_image(gray, corners, residuals, caption)
+        # Ring the board points that are off the same way in every image, where this image shows them.
+        if r is not None and r.points is not None and det is not None and len(corners):
+            wanted = {int(r.points.ids[i]) for i in trusted_suspects(r)}
+            if wanted:
+                self.view.set_rings(np.asarray(corners)[[k for k, pid in enumerate(det.ids.tolist())
+                                                         if pid in wanted]])
         self._update_toggle()
         self._refresh_chart()
 
@@ -908,7 +951,12 @@ class Workbench(QWidget):
         dets = p.detections
         n = len(p.image_paths)
         shown = p.name if len(p.name) <= 20 else p.name[:19] + "\u2026"
-        self.name_btn.setText(shown + (f" \u00b7 r{p.revision}" if p.revision else ""))
+        full = shown + (f" \u00b7 r{p.revision}" if p.revision else "")
+        # The header has room for about 20 characters here; a longer name is cut, never the layout.
+        cut = full if len(full) <= 20 else full[:19] + "\u2026"
+        self.name_btn.setText(cut)
+        self.name_btn.setToolTip((full + "\n" if cut != full else "")
+                                 + "Rename this project. Exported files carry this name.")
         keep = self._current
         self.table.blockSignals(True)
         self.table.setRowCount(n)
@@ -952,6 +1000,7 @@ class Workbench(QWidget):
         self._refresh_chart()
         res = self.result
         self.coverage.set_uncertainty(res.projection.sd if res is not None and res.projection is not None else None)
+        self.coverage.set_residuals(res.pattern.mean if res is not None and res.pattern is not None else None)
 
         # Header steps.
         t = p.target
@@ -962,7 +1011,7 @@ class Workbench(QWidget):
             ("done" if dets else "next" if n and t else "off",
              f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
             ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
-            ("next" if r else "off", "Parameters and report"),
+            ("next" if r else "off", "Files and report"),
         ]
         for step, (kind, status) in zip(self.steps, states):
             step.set_state(kind, status)

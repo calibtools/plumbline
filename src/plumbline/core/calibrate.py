@@ -82,6 +82,9 @@ class CalibrationResult:
     skipped: list[int] = field(default_factory=list)
     opencv_version: str = cv2.__version__
     uncertainty: "object | None" = None  # core.uncertainty.Uncertainty; None when it cannot be worked out
+    pattern: "object | None" = None       # core.residuals.ResidualPattern: what is left over, across the image
+    points: "object | None" = None        # core.points.PointStats: every board point across its images
+    circle_shift_px: float | None = None  # mean perspective correction applied to circle centres, if any
     projection: "object | None" = None   # core.uncertainty.ProjectionUncertainty across the image, or None
 
     @property
@@ -185,25 +188,23 @@ def calibrate(
             "and 15 to 30 from different angles give a much better result."
         )
 
-    try:
-        if options.fisheye:
-            rms, K, dist, rvecs, tvecs = cv2.fisheye.calibrate(
-                [o.reshape(1, -1, 3).astype(np.float64) for o in obj_pts],
-                [p.reshape(1, -1, 2).astype(np.float64) for p in img_pts],
-                size, np.zeros((3, 3)), np.zeros((4, 1)),
-                flags=cv2.CALIB_RECOMPUTE_EXTRINSIC | cv2.CALIB_FIX_SKEW,
-                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 200, 1e-9),
-            )
-        else:
-            rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
-                obj_pts, img_pts, size, None, None, flags=options.flags()
-            )
-    except cv2.error as exc:  # pragma: no cover - depends on OpenCV internals
-        hint = (" The fisheye model needs views that reach well into the corners of the image."
-                if options.fisheye else "")
-        raise CalibrationError(f"OpenCV could not solve this set of images.{hint} ({exc})") from exc
+    rms, K, dist, rvecs, tvecs = _solve(obj_pts, img_pts, size, options)
 
-    dist = _trim_distortion(np.asarray(dist, np.float64).reshape(-1), options)
+    # Circle grids: the detector gives the centre of each ellipse, not the image of the circle's
+    # centre. With a first result in hand the difference can be computed and removed, then solved
+    # again; the second round changes so little that two are enough.
+    circle_shift = None
+    if target.is_circles and target.marker_mm:
+        from .circles import centre_bias
+
+        raw = [p.reshape(-1, 2).astype(np.float64) for p in img_pts]
+        for _round in range(2):
+            shifts = [centre_bias(o.reshape(-1, 3), target.circle_diameter_mm / 2, r, t, K, dist, options.fisheye)
+                      for o, r, t in zip(obj_pts, rvecs, tvecs)]
+            img_pts = [(p - s).reshape(-1, 1, 2).astype(np.float32) for p, s in zip(raw, shifts)]
+            rms, K, dist, rvecs, tvecs = _solve(obj_pts, img_pts, size, options)
+        circle_shift = float(np.mean(np.linalg.norm(np.concatenate(shifts), axis=1)))
+
     views: list[ViewResult] = []
     total_sq, total_n = 0.0, 0
     for i, obj, img, rvec, tvec in zip(used, obj_pts, img_pts, rvecs, tvecs):
@@ -243,7 +244,8 @@ def calibrate(
             projection = projection_uncertainty(K, dist, options, uncertainty, size[0], size[1])
         except (cv2.error, np.linalg.LinAlgError, ValueError):
             projection = None  # the parameters still stand; only the map is left out
-    return CalibrationResult(
+    result = CalibrationResult(
+        circle_shift_px=circle_shift,
         uncertainty=uncertainty,
         projection=projection,
         image_width=size[0],
@@ -257,6 +259,35 @@ def calibrate(
         excluded=sorted(excluded),
         skipped=skipped,
     )
+    from .points import point_statistics
+
+    from .residuals import residual_pattern
+
+    result.points = point_statistics(result, detections)
+    result.pattern = residual_pattern(result, detections)
+    return result
+
+
+def _solve(obj_pts, img_pts, size, options: ModelOptions):
+    """One run of OpenCV's solver. Returns rms, K, distortion (trimmed), rvecs, tvecs."""
+    try:
+        if options.fisheye:
+            rms, K, dist, rvecs, tvecs = cv2.fisheye.calibrate(
+                [o.reshape(1, -1, 3).astype(np.float64) for o in obj_pts],
+                [p.reshape(1, -1, 2).astype(np.float64) for p in img_pts],
+                size, np.zeros((3, 3)), np.zeros((4, 1)),
+                flags=cv2.CALIB_RECOMPUTE_EXTRINSIC | cv2.CALIB_FIX_SKEW,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 200, 1e-9),
+            )
+        else:
+            rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+                obj_pts, img_pts, size, None, None, flags=options.flags()
+            )
+    except cv2.error as exc:  # pragma: no cover - depends on OpenCV internals
+        hint = (" The fisheye model needs views that reach well into the corners of the image."
+                if options.fisheye else "")
+        raise CalibrationError(f"OpenCV could not solve this set of images.{hint} ({exc})") from exc
+    return rms, K, _trim_distortion(np.asarray(dist, np.float64).reshape(-1), options), rvecs, tvecs
 
 
 def _trim_distortion(dist: np.ndarray, options: ModelOptions) -> np.ndarray:

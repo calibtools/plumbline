@@ -38,6 +38,36 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
     else:
         out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
     u = r.uncertainty
+    pattern = r.pattern
+    if pattern is not None and pattern.has_pattern:
+        if r.options.fisheye:
+            advice = "The fisheye model does not follow this lens; try the standard model with more terms."
+        elif r.options.k3 and r.options.rational:
+            advice = "If the lens is very wide, try the fisheye model."
+        else:
+            advice = "Add lens terms (k3, then the rational terms), or the fisheye model for a very wide lens."
+        out.append((CHECK, f"What is left over after the fit is not just noise: in parts of the image it leans "
+                           f"one way by up to {pattern.largest_px:.2f} px. {advice} See the Residuals map."))
+    stats = r.points
+    if stats is not None:
+        from .points import trusted_suspects
+
+        bad = trusted_suspects(r)
+        if bad:
+            obj = r.target.object_points()
+            first = bad[0]
+            x, y = obj[int(stats.ids[first])][:2]
+            size = float(np.linalg.norm(stats.offset_mm[first]))
+            more = f" {len(bad) - 1} more like it." if len(bad) > 1 else ""
+            out.append((CHECK, f"One point of the board is off the same way in every image: about {size:.2f} mm, "
+                               f"at {x:g} mm across and {y:g} mm down from the first point. "
+                               f"Look at the board there; it may be damaged or not flat.{more}"))
+    if r.target.is_circles:
+        if r.circle_shift_px is not None:
+            out.append((NOTE, f"Circle centres were corrected for perspective, {r.circle_shift_px:.2f} px on average."))
+        else:
+            out.append((NOTE, "Circle diameter not entered: centres are used as detected, without the "
+                              "correction for perspective. Enter it on the Target tab."))
     pu = r.projection
     if pu is not None and pu.worst >= LOOSE_EDGE_PX:
         out.append((CHECK, f"Towards the edge of the image the result is only good to ±{pu.worst:.1f} px "
@@ -73,8 +103,15 @@ def error_outside_fit(result: CalibrationResult, det: Detection) -> float | None
     pose = lens.solve_pose(obj, det.corners, K, dist, fisheye)
     if pose is None:
         return None
+    seen = det.corners.astype(np.float64)
+    if result.target.is_circles and result.target.marker_mm:
+        # Same treatment as the images in the fit: take off the perspective shift of the centres.
+        from .circles import centre_bias
+
+        seen = seen - centre_bias(obj, result.target.circle_diameter_mm / 2, pose[0], pose[1], K, dist, fisheye)
+        pose = lens.solve_pose(obj, seen, K, dist, fisheye) or pose
     proj = lens.project(obj, pose[0], pose[1], K, dist, fisheye)
-    return float(np.sqrt(np.mean(np.sum((proj - det.corners) ** 2, axis=1))))
+    return float(np.sqrt(np.mean(np.sum((proj - seen) ** 2, axis=1))))
 
 
 def model_sentence(result: CalibrationResult) -> str:

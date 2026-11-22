@@ -54,8 +54,6 @@ def find_board(part_number: str | None) -> StockBoard | None:
 def same_geometry(a: Target, b: Target) -> bool:
     """True when two targets are the same pattern, whatever part number they carry."""
     def strip(t: Target) -> dict:
-        # The circle diameter plays no part in detection or calibration, only in drawing.
-        skip = ("part_number", "marker_mm") if t.is_circles else ("part_number",)
-        return {k: v for k, v in t.to_dict().items() if k not in skip}
+        return {k: v for k, v in t.to_dict().items() if k != "part_number"}
 
     return strip(a) == strip(b)
