@@ -17,7 +17,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - Residuals map: what is left over after the fit, averaged across the image; a lens model that does not fit shows up as a pattern
 - Uncertainty map: how well the result is pinned down across the image, next to the coverage map
 - Reprojection error per image, corner coverage map, excluding images and solving again
-- Export: OpenCV YAML and XML, JSON, ROS `camera_info`, Excel workbook, PDF report; choose which files to write
+- Export: OpenCV YAML and XML, JSON, ROS `camera_info`, Excel workbook, PDF report (summary and findings, a page with the coverage, uncertainty and residuals maps, a table of all images); choose which files to write
 - Export for using the result: lookup tables that remove the lens distortion (`.npz`) and a short Python example that reads the YAML
 - Boards of a set that continue the marker numbering (first marker ID)
 - Calib.Tools boards by part number: pick one and the pattern settings fill in
