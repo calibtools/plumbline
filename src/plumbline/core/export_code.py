@@ -139,3 +139,104 @@ def write_example(result: CalibrationResult, path: str | Path, camera_file: str,
                   maps_file: str | None = None) -> None:
     text = example_script(result, camera_file, maps_file).replace("{name}", Path(path).name)
     Path(path).write_text(text, encoding="utf-8")
+
+
+def rig_example_script(maps_file: str, vertical: bool = False) -> str:
+    """A short Python program that lines two images up with the exported tables and measures with them."""
+    along, across = ("column", "row") if vertical else ("row", "column")
+    return f'''"""Use this two-camera calibration in your own program.
+
+Written by Plumbline {__version__} by Calib.Tools, https://calib.tools
+Lookup tables: {maps_file}
+
+Run it on one pair of images taken at the same moment:
+
+    python {{name}} camera1.png camera2.png
+
+It writes both images lined up, so that a point lies on the same {along} in both,
+and one picture of the two side by side with lines drawn across to check that.
+From a point's {across} in each lined-up image, point_from_pixels() gives where the
+point is in space, in millimetres, seen from camera 1.
+"""
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+VERTICAL = {vertical!r}   # True: the cameras sit one above the other, and points share a column
+
+
+def load(path=HERE / "{maps_file}"):
+    data = np.load(str(path))
+    return {{key: data[key] for key in data.files}}
+
+
+def line_up(image1, image2, tables=None):
+    """Both images redrawn as two ideal cameras that look the same way."""
+    t = tables or load()
+    width, height = (int(v) for v in t["image_size"])
+    for image in (image1, image2):
+        if image.shape[1] != width or image.shape[0] != height:
+            raise SystemExit(f"These tables are for images of {{width}} x {{height}} pixels, "
+                             f"this one is {{image.shape[1]}} x {{image.shape[0]}}.")
+    return (cv2.remap(image1, t["map1_x"], t["map1_y"], cv2.INTER_LINEAR),
+            cv2.remap(image2, t["map2_x"], t["map2_y"], cv2.INTER_LINEAR))
+
+
+def point_from_pixels(column1, row1, other, tables=None):
+    """Where a point is, in mm, in the lined-up camera 1.
+
+    column1, row1: the point in lined-up image 1. other: its {across} in lined-up image 2
+    (its {along} there is the same). Arrays work too.
+    """
+    t = tables or load()
+    shift = np.asarray(row1 if VERTICAL else column1, np.float64) - np.asarray(other, np.float64)
+    pixel = np.stack(np.broadcast_arrays(np.asarray(column1, np.float64), np.asarray(row1, np.float64), shift),
+                     axis=-1).reshape(-1, 1, 3)
+    return cv2.perspectiveTransform(pixel, t["Q"]).reshape(-1, 3)
+
+
+def distance_map(lined_up1, lined_up2, tables=None, most_shift=256):
+    """Distance from camera 1 for every pixel, mm, by block matching. A starting point, not a finished matcher."""
+    if VERTICAL:
+        raise SystemExit("Block matching here works along rows; these cameras are lined up along columns.")
+    t = tables or load()
+    matcher = cv2.StereoSGBM_create(minDisparity=0, numDisparities=most_shift, blockSize=7)
+    shift = matcher.compute(lined_up1, lined_up2).astype(np.float32) / 16.0
+    points = cv2.reprojectImageTo3D(shift, t["Q"])
+    far = np.linalg.norm(points, axis=2)
+    far[shift <= 0] = np.nan
+    return far
+
+
+def main(path1, path2):
+    one, two = (cv2.imread(p, cv2.IMREAD_GRAYSCALE) for p in (path1, path2))
+    if one is None or two is None:
+        raise SystemExit("One of the two images could not be read.")
+    a, b = line_up(one, two)
+    out1, out2 = (str(Path(p).with_name(Path(p).stem + "-lined-up.png")) for p in (path1, path2))
+    cv2.imwrite(out1, a)
+    cv2.imwrite(out2, b)
+    both = cv2.cvtColor(np.vstack([a, b]) if VERTICAL else np.hstack([a, b]), cv2.COLOR_GRAY2BGR)
+    step = max(40, (both.shape[1] if VERTICAL else both.shape[0]) // 16)
+    for k in range(step, both.shape[1] if VERTICAL else both.shape[0], step):
+        ends = ((k, 0), (k, both.shape[0])) if VERTICAL else ((0, k), (both.shape[1], k))
+        cv2.line(both, ends[0], ends[1], (18, 0, 230), 1)
+    check = str(Path(path1).with_name(Path(path1).stem + "-pair-check.png"))
+    cv2.imwrite(check, both)
+    print(f"Written: {{out1}}, {{out2}}, {{check}}")
+    print("In the check picture, every detail of the scene should sit on the same line in both halves.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        raise SystemExit("Give two images: python {{name}} camera1.png camera2.png")
+    main(sys.argv[1], sys.argv[2])
+'''
+
+
+def write_rig_example(path: str | Path, maps_file: str, vertical: bool = False) -> None:
+    text = rig_example_script(maps_file, vertical).replace("{name}", Path(path).name)
+    Path(path).write_text(text, encoding="utf-8")

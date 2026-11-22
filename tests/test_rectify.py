@@ -63,3 +63,51 @@ def test_points_share_a_row_and_distances_are_right(mixed, tmp_path, charuco, ca
     assert np.allclose(saved["Q"], r.Q) and np.allclose(saved["map1_y"], r.map1[1])
     again = rectify(rig)
     assert np.allclose(again.P2, r.P2)
+
+
+def test_the_two_camera_example_runs_and_measures(tmp_path, charuco, camera):
+    """The exported example lines a new pair up and places points in space with nothing but the tables."""
+    import importlib.util
+    import subprocess
+    import sys
+
+    from plumbline.core.export_code import write_rig_example
+
+    first, second = rendered_pairs(charuco, camera, 16, 7)
+    rig = calibrate_pair(first, second, charuco)
+    r = write_rectify_maps(rig, tmp_path / "rig-cameras-rectify-maps.npz")
+    write_rig_example(tmp_path / "rig-cameras-example.py", "rig-cameras-rectify-maps.npz", r.vertical)
+    rv, tv = synth.sample_poses(charuco, camera, 16, 7)[3]
+    rng = np.random.default_rng(99)
+    cv2.imwrite(str(tmp_path / "a.png"), synth.render(charuco, camera, rv, tv, rng))
+    cv2.imwrite(str(tmp_path / "b.png"), synth.render(charuco, camera, *second_pose(rv, tv), rng))
+
+    run = subprocess.run([sys.executable, str(tmp_path / "rig-cameras-example.py"), str(tmp_path / "a.png"),
+                          str(tmp_path / "b.png")], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert "same line in both halves" in run.stdout
+    for name in ("a-lined-up.png", "b-lined-up.png", "a-pair-check.png"):
+        assert (tmp_path / name).stat().st_size > 1000
+    assert cv2.imread(str(tmp_path / "a-pair-check.png")).shape[1] == 2 * camera.width
+
+    spec = importlib.util.spec_from_file_location("rig_example", tmp_path / "rig-cameras-example.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    a = detect(cv2.imread(str(tmp_path / "a-lined-up.png"), cv2.IMREAD_GRAYSCALE), charuco)
+    b = detect(cv2.imread(str(tmp_path / "b-lined-up.png"), cv2.IMREAD_GRAYSCALE), charuco)
+    common = np.intersect1d(a.ids, b.ids)
+    ia = {int(k): j for j, k in enumerate(a.ids)}
+    ib = {int(k): j for j, k in enumerate(b.ids)}
+    pa = a.corners[[ia[int(k)] for k in common]]
+    pb = b.corners[[ib[int(k)] for k in common]]
+    pts = module.point_from_pixels(pa[:, 0], pa[:, 1], pb[:, 0])
+    board = charuco.object_points()
+    far = np.argmax(np.linalg.norm(board[common] - board[common[0]], axis=1))
+    true = np.linalg.norm(board[common[far]] - board[common[0]])
+    assert true > 150 and np.linalg.norm(pts[far] - pts[0]) == pytest.approx(true, abs=0.3)
+    distance = module.distance_map(*module.line_up(cv2.imread(str(tmp_path / "a.png"), 0), cv2.imread(str(tmp_path / "b.png"), 0)))
+    assert distance.shape == (camera.height, camera.width)
+
+    wrong = subprocess.run([sys.executable, str(tmp_path / "rig-cameras-example.py"), str(tmp_path / "a.png")],
+                           capture_output=True, text=True)
+    assert wrong.returncode != 0 and "Give two images" in wrong.stderr

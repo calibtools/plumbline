@@ -280,14 +280,15 @@ def test_two_cameras_in_the_window(tmp_path, charuco, camera):
     assert "cam1 and again for cam2" in dialog.revision_note.text()
     out = tmp_path / "out"
     out.mkdir()
-    bench.export_to(str(out), formats={"opencv_yaml", "json", "ros", "report", "xlsx", "maps"})
+    bench.export_to(str(out), formats={"opencv_yaml", "json", "ros", "report", "xlsx", "maps", "example"})
     expected = {f"{name}-cam{c}-{tail}" for c in (1, 2)
                 for tail in ("camera.yml", "camera.json", "camera_info.yaml", "report.pdf", "data.xlsx",
-                             "undistort-maps.npz")}
+                             "undistort-maps.npz", "example.py")}
     expected |= {f"{name}-cameras.json", f"{name}-cameras.yml", f"{name}-cameras-report.pdf",
-                 f"{name}-cameras-rectify-maps.npz", f"{name}.plumbline"}
+                 f"{name}-cameras-rectify-maps.npz", f"{name}-cameras-example.py", f"{name}.plumbline"}
+    assert f"{name}-cameras-rectify-maps.npz" in (out / f"{name}-cameras-example.py").read_text()
     assert {p.name for p in out.iterdir()} == expected
-    assert bench.status.text().endswith("17 files, for camera 1, camera 2 and both.")
+    assert bench.status.text().endswith("20 files, for camera 1, camera 2 and both.")
     assert (out / f"{name}-cameras-report.pdf").read_bytes().startswith(b"%PDF")
     fs = cv2.FileStorage(str(out / f"{name}-cameras.yml"), cv2.FILE_STORAGE_READ)
     assert np.allclose(fs.getNode("R").mat(), rig.rotation) and np.allclose(fs.getNode("T").mat().ravel(), rig.translation)
