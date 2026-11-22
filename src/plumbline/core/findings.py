@@ -176,6 +176,9 @@ def rig_findings(rig) -> list[tuple[str, str]]:
                                       "Add pairs with the target close to the cameras and tilted."))
         else:
             out.append((NOTE, text))
+    if rig.first.options.release_board and rig.second.options.release_board:
+        out.append((NOTE, "The shape of the board was estimated by each camera on its own and the mean of the two "
+                          "was used for both. The ± on distance and angle does not cover how well that shape is known."))
     if rig.unpaired:
         k = len(rig.unpaired)
         out.append((NOTE, f"{k} pair{' takes' if k == 1 else 's take'} no part in the position of camera 2: one of "

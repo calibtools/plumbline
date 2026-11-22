@@ -53,6 +53,10 @@ class Project:
     second_camera: bool = False
     second_image_paths: list[str] = field(default_factory=list)
     second_detections: list[Detection] = field(default_factory=list)
+    second_options: ModelOptions | None = None  # camera 2's own lens settings; None = the same as camera 1
+
+    def options_of(self, camera: int) -> ModelOptions:
+        return self.second_options if camera and self.second_options is not None else self.options
 
     def paths_of(self, camera: int) -> list[str]:
         return self.second_image_paths if camera else self.image_paths
@@ -95,7 +99,8 @@ class Project:
             "exported_on": self.exported_on,
             "recheck_months": self.recheck_months,
             **({"second_camera": {"image_paths": list(self.second_image_paths),
-                                  "detections": [d.to_dict() for d in self.second_detections]}}
+                                  "detections": [d.to_dict() for d in self.second_detections],
+                                  **({"options": self.second_options.to_dict()} if self.second_options else {})}}
                if self.second_camera else {}),
         }
 
@@ -127,4 +132,6 @@ class Project:
             second_camera="second_camera" in data,
             second_image_paths=list((data.get("second_camera") or {}).get("image_paths", [])),
             second_detections=[Detection.from_dict(d) for d in (data.get("second_camera") or {}).get("detections", [])],
+            second_options=(ModelOptions.from_dict(data["second_camera"]["options"])
+                            if (data.get("second_camera") or {}).get("options") else None),
         )
