@@ -113,6 +113,25 @@ def test_one_bad_pair_does_not_spoil_the_start(charuco, camera):
     assert off(clean)[0] < 0.3 and clean.rms_point < 0.12
 
 
+def test_findings_about_the_pair_of_cameras(charuco, camera):
+    from plumbline.core.findings import CHECK, NOTE, PASS, rig_findings
+
+    first, second = exact_pairs(charuco, camera, False, 12, 2)
+    good = rig_findings(calibrate_pair(first, second, charuco))
+    assert good[0] == (PASS, "12 pairs show the target in both cameras.")
+    assert any(tag == NOTE and "Distance between the cameras 120." in t for tag, t in good)
+    assert not any("fits much worse" in t for _tag, t in good)
+    # The board moved between the two exposures of one pair.
+    bad = second[3]
+    second[3] = Detection(bad.path, bad.width, bad.height, bad.ids, bad.corners + np.float32([18.0, 0.0]))
+    found = rig_findings(calibrate_pair(first, second, charuco))
+    assert any(tag == CHECK and t.startswith("Pair 04 fits much worse") for tag, t in found)
+    # Few pairs, and one left out.
+    few = rig_findings(calibrate_pair(first[:6], second[:6], charuco, excluded={3}))
+    assert few[0][0] == CHECK and few[0][1].startswith("Only 5 pairs")
+    assert any(tag == NOTE and t.startswith("1 pair takes no part") for tag, t in few)
+
+
 def test_stated_spread_matches_repeats(charuco, camera):
     """The ± on distance and angle against what repeated calibrations with new noise really do."""
     apart, turned, stated = [], [], []
@@ -218,9 +237,10 @@ def test_two_cameras_in_the_window(tmp_path, charuco, camera):
     bench.export_to(str(out), formats={"opencv_yaml", "json", "ros", "report", "xlsx"})
     expected = {f"{name}-cam{c}-{tail}" for c in (1, 2)
                 for tail in ("camera.yml", "camera.json", "camera_info.yaml", "report.pdf", "data.xlsx")}
-    expected |= {f"{name}-cameras.json", f"{name}-cameras.yml", f"{name}.plumbline"}
+    expected |= {f"{name}-cameras.json", f"{name}-cameras.yml", f"{name}-cameras-report.pdf", f"{name}.plumbline"}
     assert {p.name for p in out.iterdir()} == expected
-    assert bench.status.text().endswith("13 files, for camera 1, camera 2 and both.")
+    assert bench.status.text().endswith("14 files, for camera 1, camera 2 and both.")
+    assert (out / f"{name}-cameras-report.pdf").read_bytes().startswith(b"%PDF")
     fs = cv2.FileStorage(str(out / f"{name}-cameras.yml"), cv2.FILE_STORAGE_READ)
     assert np.allclose(fs.getNode("R").mat(), rig.rotation) and np.allclose(fs.getNode("T").mat().ravel(), rig.translation)
     assert np.allclose(fs.getNode("K2").mat(), rig.second.camera_matrix)

@@ -24,7 +24,7 @@ from ..core.naming import export_files, result_signature, rig_files, rig_signatu
 from ..core.export_code import write_example, write_maps
 from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
-from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings
+from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, rig_findings
 from ..core.pairing import natural, split_by_camera
 from ..core.project import SUFFIX, Project
 from ..core.rig import RigResult, calibrate_pair
@@ -33,7 +33,7 @@ from ..core.targets import (
 )
 from . import theme as T
 from .export_dialog import ExportDialog
-from .report import write_report
+from .report import write_report, write_rig_report
 from .widgets import (
     RESIDUAL_GAIN, CoverageMap, ErrorChart, ImageView, LinkLabel, SvgMark, Worker, button, frame,
     label, open_site, rule,
@@ -1038,6 +1038,11 @@ class Workbench(QWidget):
                                   own if formats & {"json", "opencv_yaml"} else None)
             export.write_rig_yaml(rig, base / both["rig_yaml"])
             written += [both["rig_json"], both["rig_yaml"]]
+            if "report" in formats:
+                write_rig_report(rig, self.project.detections, self.project.second_detections,
+                                 base / both["rig_report"], name, revision,
+                                 tuple(export_files(name, revision, cam)["report"] for cam in (1, 2)))
+                written.append(both["rig_report"])
         else:
             written += self._write_camera(self.result, self.project.detections, base, export_files(name, revision),
                                           formats, name, revision, safe_name(name))
@@ -1359,7 +1364,8 @@ class Workbench(QWidget):
             self.intr_note.setText("± one standard deviation, px: " + " · ".join(parts))
         self._fill_dist(list(zip(r.distortion_names, r.distortion)),
                         {k: u.std_of(k) for k in r.distortion_names} if u is not None else {})
-        self._fill_findings(self._make_findings(r, share))
+        # With two cameras: first what concerns both, then the selected camera's own findings.
+        self._fill_findings(self._make_findings(r, share, rig if two else None))
         if two and rig is not None:
             self.rms_big.setText(f"{rig.rms_point:.3f} px")
             self.rms_note.setText(f"Both cameras together, per point. Camera 1 alone {rig.first.rms_point:.3f} px, "
@@ -1502,9 +1508,10 @@ class Workbench(QWidget):
         lay.setColumnStretch(3, 1)
         lay.setColumnMinimumWidth(2, 28)
 
-    def _make_findings(self, r: CalibrationResult, share: float):
+    def _make_findings(self, r: CalibrationResult, share: float, rig: RigResult | None = None):
         colors = {PASS: T.GREEN_TEXT, CHECK: T.RED_TEXT, NOTE: T.INK_MUTED}
-        return [(tag, colors[tag], text) for tag, text in findings(r, share)]
+        both = rig_findings(rig) if rig is not None else []
+        return [(tag, colors[tag], text) for tag, text in both + findings(r, share)]
 
     def _fill_findings(self, items):
         lay = self.findings
