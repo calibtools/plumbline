@@ -28,6 +28,7 @@ def write_report(
     path: str | Path,
     project_name: str = "Calibration",
     revision: int = 1,
+    kind: str = "Single camera",
 ) -> int:
     """Write the report. Returns the number of pages."""
     writer = QPdfWriter(str(path))
@@ -43,7 +44,7 @@ def write_report(
     try:
         # Map the 794 x 1123 layout onto whatever device size the writer reports.
         p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
-        _summary_page(p, result, detections, project_name, revision, 1, pages)
+        _summary_page(p, result, detections, project_name, revision, 1, pages, kind)
         writer.newPage()
         _maps_page(p, result, detections, project_name, 2, pages)
         for n in range(pages - 2):
@@ -126,13 +127,14 @@ def _image_rows(result: CalibrationResult, detections: list[Detection]):
 
 
 # -------------------------------------------------------------------- pages
-def _summary_page(p, r: CalibrationResult, detections, project_name, revision, page, pages) -> None:
+def _summary_page(p, r: CalibrationResult, detections, project_name, revision, page, pages,
+                  kind: str = "Single camera") -> None:
     _frame(p, page, pages, project_name)
     W = PAGE_W - 2 * M
     y = M + 48
 
     y += _text(p, M, y, W, project_name, T.mono(22, 600)) + 4
-    y += _text(p, M, y, W, f"Single camera  ·  {r.image_width} × {r.image_height} px  ·  "
+    y += _text(p, M, y, W, f"{kind}  ·  {r.image_width} × {r.image_height} px  ·  "
                f"{date.today().isoformat()}  \u00b7  Revision {revision}", T.sans(12), T.INK_MUTED) + 22
 
     # RMS block, with what went into it on the right.

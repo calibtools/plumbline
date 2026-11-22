@@ -201,17 +201,63 @@ def test_two_cameras_in_the_window(tmp_path, charuco, camera):
     settle(bench)
     assert not bench.rig.unpaired
 
-    # Exporting is not there yet for two cameras, and says so.
-    bench.export_all()
-    assert "not in this version" in bench.status.text()
+    # Export: every chosen file once per camera, and two files about how the cameras sit to each other.
+    import json
+
+    from plumbline.ui.export_dialog import ExportDialog
+
+    assert bench.steps[4]._status.text() == "Files and report"
+    rig = bench.rig
+    name = bench.project.name
+    dialog = ExportDialog(bench.project, bench.result, bench, rig=rig)
+    assert dialog.file_names()["opencv_yaml"] == f"{name}-cam1-camera.yml"
+    assert dialog.file_names()["rig_yaml"] == f"{name}-cameras.yml"
+    assert "cam1 and again for cam2" in dialog.revision_note.text()
+    out = tmp_path / "out"
+    out.mkdir()
+    bench.export_to(str(out), formats={"opencv_yaml", "json", "ros", "report", "xlsx"})
+    expected = {f"{name}-cam{c}-{tail}" for c in (1, 2)
+                for tail in ("camera.yml", "camera.json", "camera_info.yaml", "report.pdf", "data.xlsx")}
+    expected |= {f"{name}-cameras.json", f"{name}-cameras.yml", f"{name}.plumbline"}
+    assert {p.name for p in out.iterdir()} == expected
+    assert bench.status.text().endswith("13 files, for camera 1, camera 2 and both.")
+    fs = cv2.FileStorage(str(out / f"{name}-cameras.yml"), cv2.FILE_STORAGE_READ)
+    assert np.allclose(fs.getNode("R").mat(), rig.rotation) and np.allclose(fs.getNode("T").mat().ravel(), rig.translation)
+    assert np.allclose(fs.getNode("K2").mat(), rig.second.camera_matrix)
+    assert np.allclose(fs.getNode("D1").mat().ravel(), rig.first.distortion)
+    assert fs.getNode("distortion_model_1").string() == "plumb_bob" or fs.getNode("distortion_model_1").string()
+    fs.release()
+    both = json.loads((out / f"{name}-cameras.json").read_text())
+    assert both["apart_mm"] == pytest.approx(rig.apart_mm) and len(both["pairs"]) == 8
+    assert both["camera_files"] == {"camera_1": f"{name}-cam1-camera.json", "camera_2": f"{name}-cam2-camera.json"}
+    assert both["camera_2"]["camera_matrix"] == json.loads((out / f"{name}-cam2-camera.json").read_text())["camera_matrix"]
+    assert "x2 = rotation @ x1" in both["convention"]
+    # The values do what the file says: the two cameras' views of the board agree through R and T.
+    R, T = np.array(both["rotation"]), np.array(both["translation_mm"])
+    v1 = next(v for v in rig.first.views if v.index == 0)
+    v2 = next(v for v in rig.second.views if v.index == 0)
+    R1 = cv2.Rodrigues(v1.rvec)[0]
+    assert np.allclose(R @ np.asarray(v1.tvec).ravel() + T, np.asarray(v2.tvec).ravel(), atol=0.5)
+    assert np.allclose(R @ R1, cv2.Rodrigues(v2.rvec)[0], atol=2e-3)
+    # Same result exported again is the same revision; a changed one gets -r2 and leaves the first alone.
+    assert bench.project.revision == 1
+    bench.export_to(str(out), formats={"json"})
+    assert bench.project.revision == 1
+    bench._toggle(1)
+    settle(bench)
+    bench.export_to(str(out), formats={"json"})
+    assert bench.project.revision == 2 and (out / f"{name}-r2-cam1-camera.json").exists()
+    assert (out / f"{name}-r2-cameras.yml").exists() and (out / f"{name}-cameras.yml").exists()
+    bench._toggle(1)
+    settle(bench)
 
     # The project file keeps the second camera.
-    bench.project.save(str(tmp_path / "rig.plumbline"))
-    again = Project.load(str(tmp_path / "rig.plumbline"))
+    again = Project.load(str(out / f"{name}.plumbline"))
     assert again.second_camera and len(again.second_image_paths) == 8 and len(again.second_detections) == 8
-    win.open_path(str(tmp_path / "rig.plumbline"))
+    win.open_path(str(out / f"{name}.plumbline"))
     settle(win.bench)
-    assert win.bench.rig is not None and len(win.bench.rig.pairs) == 8
+    # The file is the one written with revision 2, when pair 2 was left out.
+    assert win.bench.rig is not None and win.bench.rig.unpaired == [1] and win.bench.project.revision == 2
     win.new_project()
     assert win.bench.cams_box.isHidden() and win.bench.table.columnCount() == 3 and win.bench.rig is None
 
