@@ -40,6 +40,8 @@ def result_summary(result: CalibrationResult) -> dict:
         "uncertainty": result.uncertainty.to_dict() if result.uncertainty else None,
         "projection_uncertainty": result.projection.to_dict() if result.projection else None,
         "residual_pattern": result.pattern.to_dict() if result.pattern else None,
+        # The board as estimated, only when the result was solved with it.
+        "board": result.board.to_dict() if result.board is not None and result.options.release_board else None,
         "rms_per_point_px": result.rms_point,
         "rms_per_coordinate_px": result.rms_coordinate,
         "rms_note": (

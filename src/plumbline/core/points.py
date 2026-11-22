@@ -42,7 +42,7 @@ class PointStats:
 
 def point_statistics(result: "CalibrationResult", detections: list[Detection]) -> PointStats:
     K, dist, fisheye = result.camera_matrix, result.distortion, result.fisheye
-    obj_all = result.target.object_points().astype(np.float64)
+    obj_all = result.board_points()
     per_point: dict[int, list[tuple[np.ndarray, np.ndarray]]] = {}
     step = 1e-3 * max(1.0, float(result.target.square_mm))
     for view in result.views:

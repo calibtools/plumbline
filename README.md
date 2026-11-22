@@ -12,6 +12,7 @@ Camera calibration software by [Calib.Tools](https://calib.tools). Desktop app f
 - OpenCV fisheye lens model (k1 to k4) for wide lenses
 - Corrected view: any image with the lens distortion of the result removed
 - Uncertainty: one standard deviation for every fitted parameter, and their correlations, in the result panel, the report, JSON and Excel
+- Board shape: a board that is not flat or not to size is noticed, and its shape can be estimated together with the camera
 - Board check: a point of the board that is misplaced (damage, a board that is not flat) is found and ringed in the images
 - Residuals map: what is left over after the fit, averaged across the image; a lens model that does not fit shows up as a pattern
 - Uncertainty map: how well the result is pinned down across the image, next to the coverage map
@@ -41,6 +42,8 @@ Uncertainty: the standard deviations are checked against OpenCV's own figures an
 Circle grids: the centre of a tilted circle's image is not exactly the image of its centre. With the circle diameter known, Plumbline computes that shift from a first result, takes it off and solves again. In the tests this brings the mean centre error from about 0.09 px (0.25 px with the fisheye lens) down to about 0.01 px.
 
 Residuals: with a model that fits, what is left over is noise and averages out in every part of the image. Plumbline compares the cell averages with what noise alone would give and reports a pattern when they are more than three times larger and at least 0.1 px somewhere. A fisheye lens fitted with the standard model's default terms scores about eleven; fits that are right score between 0.6 and 1.5. The shape of the residual distribution is recorded but not judged yet: rendered images give no usable limit for it.
+
+Board shape: a board that sags by a millimetre barely raises the error but moves the focal length by more than one percent in the simulated tests. After every calibration Plumbline takes a short look at whether the images would fit a shaped board clearly better, and says so. With the option on, the camera and the place of every board point are solved in turn until nothing moves; the board keeps its overall place and size, which images cannot tell. In simulation a 1.4 mm sag and a 0.3 % stretch are recovered to within 0.05 mm, with part of the board out of view in some images, for both lens models. OpenCV's own method for this (`calibrateCameraRO`) gives the same answer but needs the whole board in every image and has no fisheye version. With the option on, the stated uncertainty of the camera does not include the uncertainty of the board.
 
 Board points: every point of the board is followed across all images. A point that is off the same way in every image, as seen from the board, is reported with its place on the board and the size of the offset; the Excel export lists every point.
 

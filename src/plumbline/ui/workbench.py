@@ -404,6 +404,14 @@ class Workbench(QWidget):
         v.addSpacing(8)
         self.model_hint = label("", "small", wrap=True)
         v.addWidget(self.model_hint)
+        v.addSpacing(16)
+        v.addWidget(label("BOARD", "eyebrow"))
+        self.opt_board = QCheckBox("Estimate the shape of the board")
+        self.opt_board.toggled.connect(self._options_changed)
+        v.addWidget(self.opt_board)
+        v.addWidget(label("Leave this off for a flat, accurately made board. Tick it when the findings say the "
+                          "images fit a board that is out of flat, or for a board printed and glued by hand. "
+                          "The board's shape is then worked out together with the camera.", "small", wrap=True))
         v.addStretch(1)
         self._model_texts()
         return w
@@ -557,6 +565,7 @@ class Workbench(QWidget):
             k3=self.opt_k3.isChecked(), tangential=self.opt_tangential.isChecked(),
             rational=self.opt_rational.isChecked(), thin_prism=self.opt_prism.isChecked(),
             fisheye=bool(self.lens_kind.currentData()),
+            release_board=self.opt_board.isChecked(),
         )
 
     def _target_changed(self, *_):
@@ -684,7 +693,8 @@ class Workbench(QWidget):
             self.preset.blockSignals(False)
         o = project.options
         for box, val in ((self.opt_k3, o.k3), (self.opt_tangential, o.tangential),
-                         (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism)):
+                         (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism),
+                         (self.opt_board, o.release_board)):
             box.blockSignals(True)
             box.setChecked(val)
             box.blockSignals(False)

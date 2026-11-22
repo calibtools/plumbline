@@ -38,6 +38,28 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
     else:
         out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
     u = r.uncertainty
+    board = r.board
+    misfit = r.pattern is not None and r.pattern.has_pattern
+    if board is not None and r.options.release_board:
+        shape = f"{board.out_of_flat_mm:.2f} mm out of flat, up to {board.in_plane_mm:.2f} mm off within its plane"
+        if board.clearly_better:
+            out.append((NOTE, f"The shape of the board was estimated with the camera: {shape}. "
+                              f"With the board as entered the error would be {board.rms_nominal:.2f} px."))
+        else:
+            out.append((NOTE, f"The shape of the board was estimated with the camera and came out close to the "
+                              f"board as entered ({shape}). Estimating it was not needed here and makes the "
+                              "result a little less certain; consider switching it off."))
+        if not board.settled:
+            out.append((CHECK, "The estimate of the board's shape was still moving when it was stopped. "
+                               "Treat this result with care; more images of the whole board help."))
+    elif board is not None and board.clearly_better and not misfit:
+        flat = (f"about {board.out_of_flat_mm:.1f} mm out of flat" if board.out_of_flat_mm >= 0.1
+                else "not quite the shape entered")
+        out.append((CHECK, f"These images fit clearly better if the board is {flat} "
+                           f"(error {board.rms_released:.2f} instead of {board.rms_nominal:.2f} px). "
+                           "A result that takes the board to be flat and to size is then off. "
+                           "Check the board and its measurements, or tick 'Estimate the shape of the board' "
+                           "on the Model tab."))
     pattern = r.pattern
     if pattern is not None and pattern.has_pattern:
         if r.options.fisheye:
@@ -98,7 +120,7 @@ def error_outside_fit(result: CalibrationResult, det: Detection) -> float | None
     """RMS error an image would have under this result, for images that took no part in the fit."""
     if not det.usable:
         return None
-    obj = result.target.object_points()[det.ids].astype(np.float64)
+    obj = result.board_points()[det.ids]
     K, dist, fisheye = result.camera_matrix, result.distortion, result.fisheye
     pose = lens.solve_pose(obj, det.corners, K, dist, fisheye)
     if pose is None:
