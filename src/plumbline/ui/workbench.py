@@ -1,6 +1,7 @@
 """Main working window: target, images, detection, calibration, export."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -456,6 +457,19 @@ class Workbench(QWidget):
         v = QVBoxLayout(w)
         v.setContentsMargins(20, 16, 20, 16)
         v.setSpacing(6)
+        # Two cameras: one set of lens settings for both, unless camera 2 is given its own.
+        self.own_model = QCheckBox("Camera 2 has its own lens settings")
+        self.own_model.setToolTip("Leave this off for two cameras of the same kind with the same lens. Tick it for "
+                                  "different lenses: the settings below then belong to the camera selected on the left.")
+        self.own_model.toggled.connect(self._own_model_toggled)
+        self.model_for = label("", "small", wrap=True)
+        self.own_box = QWidget()             # shown only with two cameras
+        ob = QVBoxLayout(self.own_box)
+        ob.setContentsMargins(0, 0, 0, 10)
+        ob.setSpacing(6)
+        ob.addWidget(self.own_model)
+        ob.addWidget(self.model_for)
+        v.addWidget(self.own_box)
         v.addWidget(label("LENS MODEL", "eyebrow"))
         self.lens_kind = QComboBox()
         self.lens_kind.setFixedHeight(36)
@@ -786,9 +800,41 @@ class Workbench(QWidget):
                 self._say("Target changed. Run detection again.")
         self._refresh()
 
+    def _own_model_toggled(self, on: bool) -> None:
+        p = self.project
+        p.second_options = replace(p.options) if on else None
+        self._fill_model(p.options_of(self._cam))
+        if self.result is not None:
+            self.result = None
+            self._say("Model changed. Calibrate again.")
+        self._refresh()
+
+    def _fill_model(self, o: ModelOptions) -> None:
+        """Put a camera's lens settings into the Model tab without setting anything off."""
+        for box, val in ((self.opt_k3, o.k3), (self.opt_tangential, o.tangential),
+                         (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism),
+                         (self.opt_board, o.release_board)):
+            box.blockSignals(True)
+            box.setChecked(val)
+            box.blockSignals(False)
+        self.lens_kind.blockSignals(True)
+        self.lens_kind.setCurrentIndex(1 if o.fisheye else 0)
+        self.lens_kind.blockSignals(False)
+        self._model_texts()
+
     def _options_changed(self, *_):
         self._model_texts()
-        self.project.options = self.current_options()
+        o, p = self.current_options(), self.project
+        if p.second_camera and p.second_options is not None:
+            # The lens settings belong to the selected camera; the board is one board for both.
+            if self._cam:
+                p.second_options = o
+                p.options = replace(p.options, release_board=o.release_board)
+            else:
+                p.options = o
+                p.second_options = replace(p.second_options, release_board=o.release_board)
+        else:
+            p.options = o
         if self.result is not None:
             self.result = None
             self._say("Model changed. Calibrate again.")
@@ -805,17 +851,10 @@ class Workbench(QWidget):
             self.preset.blockSignals(True)
             self.preset.setCurrentIndex(max(0, self.preset.findData(t.part_number)) if t.part_number else 0)
             self.preset.blockSignals(False)
-        o = project.options
-        for box, val in ((self.opt_k3, o.k3), (self.opt_tangential, o.tangential),
-                         (self.opt_rational, o.rational), (self.opt_prism, o.thin_prism),
-                         (self.opt_board, o.release_board)):
-            box.blockSignals(True)
-            box.setChecked(val)
-            box.blockSignals(False)
-        self.lens_kind.blockSignals(True)
-        self.lens_kind.setCurrentIndex(1 if o.fisheye else 0)
-        self.lens_kind.blockSignals(False)
-        self._model_texts()
+        self.own_model.blockSignals(True)
+        self.own_model.setChecked(project.second_options is not None)
+        self.own_model.blockSignals(False)
+        self._fill_model(project.options)
         self._target_changed()
         if self.project.target is None:
             self.project.target = t
@@ -850,6 +889,8 @@ class Workbench(QWidget):
             return
         self._cam = which
         self._result = self._result_of(which)
+        if self.project.second_options is not None:
+            self._fill_model(self.project.options_of(which))
         self._refresh()
 
     def _toggle_second_camera(self) -> None:
@@ -866,7 +907,11 @@ class Workbench(QWidget):
                     self, "Plumbline", "Remove camera 2 and its images from this project?") \
                     != QMessageBox.StandardButton.Yes:
                 return
-            p.second_camera, p.second_image_paths, p.second_detections = False, [], []
+            p.second_camera, p.second_image_paths, p.second_detections, p.second_options = False, [], [], None
+            self.own_model.blockSignals(True)
+            self.own_model.setChecked(False)
+            self.own_model.blockSignals(False)
+            self._fill_model(p.options)
             self._cam = 0
             self.result = None
             self._say("Camera 2 removed.")
@@ -986,7 +1031,8 @@ class Workbench(QWidget):
                 self._left_out = ""
                 self._refresh()
 
-            self._start(lambda _p: calibrate_pair(dets, dets2, target, options, options, excluded), done_rig,
+            second = self.project.options_of(1)
+            self._start(lambda _p: calibrate_pair(dets, dets2, target, options, second, excluded), done_rig,
                         "Calibrating")
             return
 
@@ -1180,16 +1226,19 @@ class Workbench(QWidget):
         name = Path(paths[row]).name
         word = self.project.target.point_word if self.project.target else "corners"
         if two:
-            # Half the width: the caption keeps to what tells the two images apart.
+            # Half the width, and the first view shares its strip with the button: two short lines in both
+            # views, the file on the first and the figures on the second.
+            if len(name) > 18:
+                name = name[:8] + "…" + name[-8:]
             name = f"Camera {cam + 1} · {name}"
             if det is None:
-                caption = f"{name} · not checked yet"
+                caption = f"{name}\nnot checked yet"
             elif det.count == 0 or not det.usable:
-                caption = f"{name} · {det.note}"
+                caption = f"{name}\n{det.note}"
             elif fit is not None:
-                caption = f"{name} · {det.count} {word} · {fit.rms_point:.3f} px"
+                caption = f"{name}\n{det.count} {word} · {fit.rms_point:.3f} px"
             else:
-                caption = f"{name} · {det.count} {word}"
+                caption = f"{name}\n{det.count} {word}"
         elif det is None:
             caption = f"{name} · not checked yet"
         elif det.count == 0 or not det.usable:
@@ -1394,6 +1443,11 @@ class Workbench(QWidget):
         self.images_head.setText("PAIRS" if two else "IMAGES")
         self.chart_head.setText("ERROR PER PAIR" if two else "ERROR PER IMAGE")
         self.chart.per = "pair" if two else "image"
+        own = two and self.project.second_options is not None
+        self.own_box.setVisible(two)
+        self.model_for.setVisible(own)
+        self.model_for.setText(f"The lens settings below are for camera {self._cam + 1}. Select the other camera "
+                               "on the left to see its settings. The board setting is for both.")
         self.camera_link.setText("Remove camera 2" if two else "Add a second camera")
         hh = self.table.horizontalHeader()
         want = 4 if two else 3

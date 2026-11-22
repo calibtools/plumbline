@@ -222,7 +222,11 @@ def calibrate_pair(
     if len(both) < MIN_PAIRS:
         raise CalibrationError(f"Only {len(both)} pairs have the target in both images; at least {MIN_PAIRS} are needed.")
 
+    # The board as the single-camera solves left it: as entered, or with its shape estimated. Each camera
+    # estimates the shape on its own; both are held to the same place and size, so their mean is the board.
     board = np.asarray(target.object_points(), np.float64)
+    if a.options.release_board and b.options.release_board:
+        board = (np.asarray(a.board_points(), np.float64) + np.asarray(b.board_points(), np.float64)) / 2
     estimates = []
     for i in both:
         R1, R2 = _rot(va[i].rvec), _rot(vb[i].rvec)
@@ -230,10 +234,14 @@ def calibrate_pair(
         estimates.append((R, np.asarray(vb[i].tvec, np.float64).ravel() - R @ np.asarray(va[i].tvec, np.float64).ravel()))
     R0, T0 = _middle(estimates)
 
-    def clean(det: Detection):
-        return Detection(det.path, det.width, det.height, np.asarray(det.ids).ravel(), np.asarray(det.corners, np.float64).reshape(-1, 2))
+    def seen(det: Detection, view, cam: CalibrationResult):
+        """The points as that camera's own solve took them: circle centres already corrected for perspective."""
+        ids = np.asarray(det.ids).ravel()
+        placed = lens.project(np.asarray(cam.board_points(), np.float64)[ids], view.rvec, view.tvec,
+                              cam.camera_matrix, cam.distortion, cam.fisheye)
+        return Detection(det.path, det.width, det.height, ids, placed - np.asarray(view.residuals, np.float64))
 
-    fit = _Fit(board, [(clean(first[i]), clean(second[i])) for i in both], a, b)
+    fit = _Fit(board, [(seen(first[i], va[i], a), seen(second[i], vb[i], b)) for i in both], a, b)
     rig0 = np.concatenate([_rvec(R0), T0])
     poses0 = np.array([np.concatenate([np.asarray(va[i].rvec, np.float64).ravel(), np.asarray(va[i].tvec, np.float64).ravel()])
                        for i in both])

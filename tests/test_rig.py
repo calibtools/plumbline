@@ -132,6 +132,41 @@ def test_findings_about_the_pair_of_cameras(charuco, camera):
     assert any(tag == NOTE and t.startswith("1 pair takes no part") for tag, t in few)
 
 
+def test_circle_centres_are_corrected_in_both_cameras(camera):
+    """The joint fit takes the points as each camera's own solve took them, perspective correction included."""
+    from plumbline.core.targets import CIRCLES, Target
+
+    board = Target(CIRCLES, 9, 7, 20.0, 12.0)
+    first, second = rendered_pairs(board, camera, 30, 7)
+    corrected = calibrate_pair(first, second, board)
+    plain = calibrate_pair(first, second, Target(CIRCLES, 9, 7, 20.0, None))      # diameter not known: no correction
+    assert len(corrected.pairs) >= 3 and corrected.first.circle_shift_px > 0.05 and plain.first.circle_shift_px is None
+    assert off(corrected)[0] < 0.03 and off(corrected)[0] < off(plain)[0]
+
+
+def test_an_estimated_board_shape_is_used_for_both_cameras(charuco, camera):
+    from test_board import shaped
+
+    from plumbline.core.findings import NOTE, rig_findings
+
+    truth = shaped(charuco, sag_mm=1.0)
+    rng = np.random.default_rng(5)
+    first, second = [], []
+    for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 24, 7)):
+        for store, (rr, tt) in ((first, (r, t)), (second, second_pose(r, t))):
+            p = lens.project(truth, rr, tt, camera.K, camera.dist, False)
+            ok = (p[:, 0] > 5) & (p[:, 0] < camera.width - 5) & (p[:, 1] > 5) & (p[:, 1] < camera.height - 5)
+            store.append(Detection(f"v{i}.png", camera.width, camera.height, np.nonzero(ok)[0].astype(np.int32),
+                                   (p[ok] + rng.normal(0, 0.08, (int(ok.sum()), 2))).astype(np.float32)))
+    flat = calibrate_pair(first, second, charuco)
+    free = calibrate_pair(first, second, charuco, ModelOptions(release_board=True))
+    # Taken as flat, a board that sags by 1 mm puts camera 2 about 2 mm and half a degree off.
+    assert off(flat)[0] > 1.0 and off(flat)[1] > 0.2
+    assert off(free)[0] < 0.6 and off(free)[1] < 0.1 and free.rms_point < 0.15
+    assert any(tag == NOTE and "does not cover how well that shape is known" in t for tag, t in rig_findings(free))
+    assert not any("shape of the board" in t for _tag, t in rig_findings(flat))
+
+
 def test_stated_spread_matches_repeats(charuco, camera):
     """The ± on distance and angle against what repeated calibrations with new noise really do."""
     apart, turned, stated = [], [], []
@@ -328,4 +363,85 @@ def test_two_cameras_in_the_window(tmp_path, charuco, camera):
     assert not bench.project.second_camera and len(bench.project.image_paths) == 8
     settle(bench)
     assert bench.rig is None and bench.result is not None
+    QSettings().setValue("project_counter", 0)
+
+
+def test_two_different_lenses_in_the_window(tmp_path, charuco, camera, fisheye_camera):
+    """Camera 1 has a standard lens, camera 2 a fisheye: camera 2 gets its own lens settings."""
+    pytest.importorskip("PySide6")
+    import os
+    import time
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings, QStandardPaths
+
+    from plumbline.app import MainWindow, create_app
+    from plumbline.core.project import Project
+
+    QStandardPaths.setTestModeEnabled(True)
+    app = create_app([])
+    QSettings().clear()
+    rng = np.random.default_rng(7)
+    paths = []
+    for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 10, 7)):
+        for cam, pose, name in ((camera, (r, t), "cam1"), (fisheye_camera, second_pose(r, t), "cam2")):
+            paths.append(str(tmp_path / f"{name}-{i:02d}.png"))
+            cv2.imwrite(paths[-1], synth.render(charuco, cam, pose[0], pose[1], rng))
+
+    def settle(bench):
+        end, quiet = time.time() + 240, 0
+        while time.time() < end and quiet <= 40:
+            app.processEvents()
+            time.sleep(0.02)
+            quiet = 0 if bench._busy() else quiet + 1
+
+    win = MainWindow()
+    win.show()
+    win.new_project()
+    bench = win.bench
+    bench._fill_fields(charuco)
+    bench._target_changed()
+    assert bench.own_box.isHidden()
+    bench.add_images(paths)
+    settle(bench)
+    # One set of settings for both to begin with.
+    assert not bench.own_box.isHidden() and not bench.own_model.isChecked() and bench.model_for.isHidden()
+    assert not bench.rig.second.fisheye and not bench.rig.first.fisheye
+
+    bench.own_model.setChecked(True)
+    assert bench.project.second_options == bench.project.options and bench.rig is None
+    bench._select_camera(1)
+    assert "camera 2" in bench.model_for.text() and not bench.model_for.isHidden()
+    bench.lens_kind.setCurrentIndex(1)
+    assert bench.project.second_options.fisheye and not bench.project.options.fisheye
+    bench._select_camera(0)
+    assert bench.lens_kind.currentIndex() == 0          # camera 1's settings are shown again, unchanged
+    bench.run_calibration()
+    settle(bench)
+    rig = bench.rig
+    assert rig.second.fisheye and not rig.first.fisheye
+    assert rig.second.rms_point < 0.2 and rig.rms_point < 0.2
+    print("fisheye fx", rig.second.fx, "off", off(rig), "std", rig.apart_std_mm, rig.turned_std_deg)
+    # The target fills only the middle of the wide camera's image here, so its focal length is loosely held.
+    assert rig.second.fx == pytest.approx(fisheye_camera.K[0, 0], rel=0.01)
+    print("std of T", rig.std[3:], "std of rotation, deg", np.rad2deg(rig.std[:3]))
+    assert off(rig)[0] < 3 * np.linalg.norm(rig.std[3:]) + 0.3
+    assert off(rig)[1] < 3 * np.rad2deg(np.linalg.norm(rig.std[:3])) + 0.05
+
+    # The board setting is one for both cameras, whichever camera is selected.
+    bench._select_camera(1)
+    bench.opt_board.setChecked(True)
+    assert bench.project.options.release_board and bench.project.second_options.release_board
+    bench.opt_board.setChecked(False)
+
+    # Saved and opened again, camera 2 keeps its own settings.
+    bench.project.save(str(tmp_path / "two-lenses.plumbline"))
+    again = Project.load(str(tmp_path / "two-lenses.plumbline"))
+    assert again.second_options.fisheye and not again.options.fisheye
+    win.open_path(str(tmp_path / "two-lenses.plumbline"))
+    settle(win.bench)
+    assert win.bench.own_model.isChecked() and win.bench.rig.second.fisheye
+    # Taking the tick away puts both cameras on camera 1's settings.
+    win.bench.own_model.setChecked(False)
+    assert win.bench.project.second_options is None
     QSettings().setValue("project_counter", 0)
