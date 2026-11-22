@@ -81,6 +81,7 @@ class CalibrationResult:
     excluded: list[int] = field(default_factory=list)
     skipped: list[int] = field(default_factory=list)
     opencv_version: str = cv2.__version__
+    uncertainty: "object | None" = None  # core.uncertainty.Uncertainty; None when it cannot be worked out
 
     @property
     def rms_coordinate(self) -> float:
@@ -230,7 +231,13 @@ def calibrate(
             f"({rms_point:.6f}) differs from OpenCV's ({float(rms):.6f})."
         )
 
+    from .uncertainty import parameter_uncertainty  # here to avoid a circular import
+
+    uncertainty = parameter_uncertainty(
+        K, dist, options, [(obj, v.rvec, v.tvec, v.residuals) for obj, v in zip(obj_pts, views)]
+    )
     return CalibrationResult(
+        uncertainty=uncertainty,
         image_width=size[0],
         image_height=size[1],
         camera_matrix=np.asarray(K, np.float64),

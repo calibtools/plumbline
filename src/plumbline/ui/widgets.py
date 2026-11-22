@@ -179,7 +179,7 @@ class ErrorChart(QWidget):
         p.drawLine(QPointF(plot.left(), plot.bottom()), QPointF(plot.right(), plot.bottom()))
         p.setPen(QColor(T.INK_MUTED))
         p.drawText(QRectF(plot.left(), h - 18, plot.width(), 16), Qt.AlignmentFlag.AlignLeft,
-                   "px per image, RMS per point · click a bar to exclude or restore it")
+                   "px per image · click a bar to exclude or restore it")
 
     def _hit(self, pos) -> int | None:
         for r, idx in self._rects:

@@ -10,6 +10,8 @@ from .calibrate import CalibrationResult, suggest_exclusions
 from .detect import Detection
 
 GOOD_RMS = 0.5  # px per point; above this the result deserves a second look
+LOOSE_CENTRE_SHARE = 0.002  # of the image width; beyond it the principal point is poorly determined
+LOOSE_FOCAL_PERCENT = 0.2  # above this share of the focal length, more or better views are advised
 PASS, CHECK, NOTE = "PASS", "CHECK", "NOTE"
 
 
@@ -34,6 +36,20 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
                            "Add views that reach the empty cells in the coverage map."))
     else:
         out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
+    u = r.uncertainty
+    centre = max((u.std_of(k) or 0.0) for k in ("cx", "cy")) if u is not None else 0.0
+    if centre > LOOSE_CENTRE_SHARE * r.image_width:
+        out.append((CHECK, f"The image centre is only pinned down to ±{centre:.1f} px. The lens model may have "
+                           "more terms than these images can tell apart; try it with fewer."))
+    sd = u.std_of("fx") if u is not None else None
+    if sd is not None:
+        share = 100 * sd / r.fx
+        if share > LOOSE_FOCAL_PERCENT:
+            out.append((CHECK, f"Focal length is only pinned down to ±{sd:.1f} px ({share:.2f} %). "
+                               "Add images with the target tilted more strongly and at several distances."))
+        else:
+            out.append((NOTE, f"Focal length ±{sd:.2f} px ({share:.3f} %), one standard deviation "
+                              "from the scatter of the points."))
     if len(r.views) < 10:
         out.append((NOTE, f"Only {len(r.views)} images in use. 15 to 30 give a steadier result."))
     if r.excluded:

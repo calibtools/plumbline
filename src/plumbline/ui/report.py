@@ -153,11 +153,26 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
     _eyebrow(p, M, y, "Parameters")
     y += 16
     half = (W - 16) / 2
-    h_a = _kv_table(p, M, y, half, [("fx, px", f"{r.fx:.3f}"), ("fy, px", f"{r.fy:.3f}"),
-                                    ("cx, px", f"{r.cx:.3f}"), ("cy, px", f"{r.cy:.3f}")])
+    u = r.uncertainty
+
+    def pm(name: str, value: float, digits: int) -> str:
+        sd = u.std_of(name) if u is not None else None
+        return f"{value:.{digits}f}" if sd is None else f"{value:.{digits}f} ± {sd:.{digits}f}"
+
+    h_a = _kv_table(p, M, y, half, [("fx, px", pm("fx", r.fx, 3)), ("fy, px", pm("fy", r.fy, 3)),
+                                    ("cx, px", pm("cx", r.cx, 3)), ("cy, px", pm("cy", r.cy, 3))],
+                    cols=1 if u is not None else 2)
     h_b = _kv_table(p, M + half + 16, y, half,
-                    [(k, f"{v:.6f}") for k, v in zip(r.distortion_names, r.distortion)])
-    y += max(h_a, h_b) + 20
+                    [(k, pm(k, float(v), 6)) for k, v in zip(r.distortion_names, r.distortion)],
+                    cols=1 if u is not None else 2)
+    y += max(h_a, h_b) + 6
+    if u is not None:
+        y += _text(p, M, y, W,
+                   "± is one standard deviation, worked out from the scatter of the detected points "
+                   f"({u.noise_px:.3f} px per coordinate). It does not cover a board that is not flat or "
+                   "not the size entered, or a lens model that does not fit the lens.",
+                   T.sans(11), T.INK_MUTED, wrap=True)
+    y += 14
 
     # Target and method.
     _eyebrow(p, M, y, "Target and method")

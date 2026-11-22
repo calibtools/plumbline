@@ -37,6 +37,7 @@ def result_summary(result: CalibrationResult) -> dict:
         "camera_matrix": result.camera_matrix.tolist(),
         "distortion_coefficients": dist,
         "distortion_names": result.distortion_names,
+        "uncertainty": result.uncertainty.to_dict() if result.uncertainty else None,
         "rms_per_point_px": result.rms_point,
         "rms_per_coordinate_px": result.rms_coordinate,
         "rms_note": (
