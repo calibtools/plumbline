@@ -1,5 +1,5 @@
 {
- "source": "calibtools-site@69bad21, src/lib/catalogPatterns.ts",
+ "source": "calibtools-site@be96188, src/lib/catalogPatterns.ts",
  "boards": [
   {
    "part_number": "CT-CHA-P-200X150-D6",
@@ -394,7 +394,7 @@
    "product": "aprilgrid-composite",
    "kind": "aprilgrid",
    "squares_x": 10,
-   "squares_y": 7,
+   "squares_y": 6,
    "square_mm": 45,
    "marker_mm": 13.5,
    "dictionary": "DICT_APRILTAG_36h11",
