@@ -1552,7 +1552,8 @@ class Workbench(QWidget):
     def _empty_message(self) -> str:
         if not self.project.image_paths:
             return ("Add 15 to 30 images of your target.\n\nMove the target, not only the camera: "
-                    "tilt it up to about 35 degrees, and cover the corners and edges of the image.")
+                    "tilt it up to about 35 degrees, and cover the corners and edges of the image. "
+                    "Hold everything still while each image is taken.")
         return "Select an image on the left."
 
     def _refresh_chart(self):
