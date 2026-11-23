@@ -19,7 +19,9 @@ def turn(x, y):
 
 
 # Camera 2 to the right of camera 1 and turned inwards; camera 3 to the left, higher, turned the other way.
-PLACES = [(np.eye(3), np.zeros(3)), (turn(0, -4), np.array([-120.0, 2.0, 5.0])), (turn(3, 5), np.array([130.0, -60.0, 10.0]))]
+PLACES = [(np.eye(3), np.zeros(3)), (turn(0, -4), np.array([-120.0, 2.0, 5.0])), (turn(3, 5), np.array([130.0, -60.0, 10.0])),
+          (turn(-2, 3), np.array([60.0, 70.0, -8.0])), (turn(2, -6), np.array([-200.0, -40.0, 12.0])),
+          (turn(-3, 2), np.array([40.0, -110.0, 6.0]))]
 
 
 def views(target, cameras, wide, count=16, seed=3, noise=0.08, hide=()):
@@ -90,6 +92,24 @@ def test_a_camera_that_never_shares_a_view_with_camera_1(charuco, camera):
     assert any("first placed through camera 2" in text for _k, text in group_findings(g))
 
 
+def test_a_chain_of_four_cameras(charuco, camera):
+    """1 sees the board with 2, 2 with 3, 3 with 4, and never otherwise: every camera is reached through the one before."""
+    together = {i: (0, 1) for i in range(6)} | {i: (1, 2) for i in range(6, 12)} | {i: (2, 3) for i in range(12, 18)}
+    hide = {(c, i) for i, there in together.items() for c in range(4) if c not in there}
+    g = calibrate_group(views(charuco, [camera] * 4, [False] * 4, count=18, hide=hide), charuco)
+    assert [p.through for p in g.placed] == [0, 1, 2] and [p.sets for p in g.placed] == [12, 12, 6]
+    assert all(within(p, *off(p)) for p in g.placed)
+    # The same cameras with every set seen by all four: the end of the chain is known less well than that.
+    direct = calibrate_group(views(charuco, [camera] * 4, [False] * 4, count=18), charuco)
+    assert np.linalg.norm(g.placed[2].position_std) > 1.5 * np.linalg.norm(direct.placed[2].position_std)
+
+
+def test_six_cameras(charuco, camera):
+    g = calibrate_group(views(charuco, [camera] * 6, [False] * 6, count=12), charuco)
+    assert len(g.placed) == 5 and all(p.through == 0 for p in g.placed)
+    assert all(within(p, *off(p)) for p in g.placed)
+
+
 def test_two_cameras_give_what_the_pair_solve_gives(charuco, camera):
     dets = views(charuco, [camera] * 2, [False] * 2)
     g, rig = calibrate_group(dets, charuco), calibrate_pair(dets[0], dets[1], charuco)
@@ -135,7 +155,7 @@ def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
     files = []
     for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 8, 7)):
         R1 = cv2.Rodrigues(np.asarray(r, np.float64))[0]
-        for c, (R, T) in enumerate(PLACES):
+        for c, (R, T) in enumerate(PLACES[:3]):
             files.append(str(tmp_path / f"cam{c + 1}-{i:02d}.png"))
             cv2.imwrite(files[-1], synth.render(charuco, camera, cv2.Rodrigues(R @ R1)[0].ravel(),
                                                 R @ np.asarray(t, np.float64).ravel() + T, rng))
