@@ -2,9 +2,13 @@ name: Installers
 
 # Builds the compressed download for each platform and starts the installed app once.
 # Unsigned: signing and notarization need the owner's certificates.
+# A tag "v<version>" builds the same downloads and puts them into a draft release for the owner to look
+# over and publish. Nothing is published by the tag alone.
 on:
   pull_request:
     paths: ["packaging/**", ".github/workflows/package.yml", "pyproject.toml", "src/**"]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -34,6 +38,13 @@ jobs:
         id: v
         shell: bash
         run: echo "version=$(python -c 'import plumbline; print(plumbline.__version__)')" >> "$GITHUB_OUTPUT"
+      - name: The tag must name the version in the code
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.v.outputs.version }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match version ${{ steps.v.outputs.version }} in src/plumbline/__init__.py"; exit 1
+          fi
       - name: Build the app
         run: pyinstaller packaging/plumbline.spec --noconfirm
 
@@ -120,3 +131,29 @@ jobs:
           path: dist/installer/*
           retention-days: 14
           compression-level: 0
+
+  release:
+    # Only for a version tag, and only when all four downloads were built and started.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          cd downloads && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt && cd ..
+          python tools/release_notes.py "${GITHUB_REF_NAME#v}" > notes.md
+          cat notes.md
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" downloads/* --draft --prerelease \
+            --title "Plumbline ${GITHUB_REF_NAME#v}" --notes-file notes.md
+

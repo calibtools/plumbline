@@ -77,6 +77,10 @@ python -m pip install -e ".[dev]"
 python -m plumbline
 ```
 
+## Releases
+
+`CHANGELOG.md` lists what each version brings. A tag `v<version>` that matches the version in `src/plumbline/__init__.py` builds the four downloads, starts each installed app once, and collects them with checksums into a draft release; the draft is published by hand. About (bottom right in the app) shows the version details a problem report needs and starts an e-mail with them; the app itself sends nothing.
+
 ## Earlier browser version
 
 The browser prototype (TypeScript, opencv.js) is kept on the branch `archive/browser-p1`. It is no longer developed.

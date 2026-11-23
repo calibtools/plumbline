@@ -70,6 +70,20 @@ class LinkLabel(QLabel):
         QDesktopServices.openUrl(QUrl(self._url))
 
 
+class ClickLabel(QLabel):
+    """Text that does something in the app when clicked; looks like a link."""
+
+    clicked = Signal()
+
+    def __init__(self, text: str, role: str = "link", parent=None):
+        super().__init__(text, parent)
+        self.setProperty("role", role)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, _e):
+        self.clicked.emit()
+
+
 def button(text: str, kind: str | None = None) -> QPushButton:
     b = QPushButton(text)
     if kind:
