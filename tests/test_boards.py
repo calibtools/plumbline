@@ -287,3 +287,38 @@ def test_a_board_in_front_of_another_hides_part_of_a_marker(kind):
     said = far_points(result)
     print([f.text for f in said] if isinstance(said, list) else said)
     assert said
+
+
+def test_several_boards_with_several_cameras(camera):
+    """Each board in each set of images is a set of its own: the fit for several cameras takes them as they come."""
+    from plumbline.core.group import calibrate_group
+    from plumbline.core.rig import calibrate_pair
+    from test_group import PLACES, off
+
+    board = Target(CHARUCO, 7, 5, 30.0, 22.0, "DICT_5X5_250")
+    wide = Target(CHARUCO, 14, 5, 30.0, 22.0, "DICT_5X5_250")
+    pts = board.object_points().astype(np.float64)
+    rng = np.random.default_rng(4)
+    per_camera = [[[], []] for _ in range(3)]            # [camera][board][set]
+    for i, (r, t) in enumerate(synth.sample_poses(wide, camera, 12, 5)):
+        R1, t1 = rot(r), np.asarray(t, np.float64).ravel()
+        for c, (Rc, Tc) in enumerate(PLACES[:3]):
+            for b, (Rb, tb) in enumerate(((np.eye(3), np.zeros(3)), (R_12, T_12))):
+                p = lens.project(pts @ Rb.T + tb, cv2.Rodrigues(Rc @ R1)[0].ravel(), Rc @ t1 + Tc, camera.K, camera.dist, False)
+                ok = (p[:, 0] > 5) & (p[:, 0] < camera.width - 5) & (p[:, 1] > 5) & (p[:, 1] < camera.height - 5)
+                per_camera[c][b].append(Detection(f"cam{c + 1}-{i:02d}.png", camera.width, camera.height,
+                                                  np.nonzero(ok)[0].astype(np.int32),
+                                                  (p[ok] + rng.normal(0, 0.08, (int(ok.sum()), 2))).astype(np.float32)))
+    one = calibrate_group([boards[0] for boards in per_camera], board)
+    both = calibrate_group([together(boards) for boards in per_camera], board)
+    for name, g in (("one board", one), ("two boards", both)):
+        print(name, "sets", len(g.sets), [(round(off(p)[0], 3), round(off(p)[1], 4), round(float(np.linalg.norm(p.std[3:])), 3))
+                                          for p in g.placed])
+    assert len(both.sets) > len(one.sets)
+    for a, b in zip(one.placed, both.placed):
+        shift, angle = off(b)
+        assert shift < 2.5 * np.linalg.norm(b.std[3:]) and angle < 2.5 * np.rad2deg(np.linalg.norm(b.std[:3]))
+        assert np.linalg.norm(b.std[3:]) < 0.8 * np.linalg.norm(a.std[3:])       # more to go on: each camera is placed more firmly
+    # Two cameras the same way.
+    pair = calibrate_pair(together(per_camera[0]), together(per_camera[1]), board)
+    assert np.linalg.norm(pair.translation - PLACES[1][1]) < 3.0
