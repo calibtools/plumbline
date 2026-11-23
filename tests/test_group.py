@@ -209,8 +209,12 @@ def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
     from plumbline.ui.report import write_group_report
     pages = write_group_report(bench.group, [bench.project.detections_of(c) for c in range(3)], out / "all.pdf", name, 1)
     assert pages == 3 and (out / "all.pdf").stat().st_size > 20_000
+    write_group_report(bench.group, [bench.project.detections_of(c) for c in range(3)], out / "checked.pdf", name, 1,
+                       check=bench.check)
+    assert (out / "checked.pdf").stat().st_size > (out / "all.pdf").stat().st_size
     data = json.loads((out / f"{name}-cameras.json").read_text())
     assert data["camera_count"] == 3 and (out / f"{name}-cameras.yml").exists()
+    assert data["check_with_other_images"]["measured_over_true"] == bench.check.scale
     assert not list(out.glob("*rectify*")) and not list(out.glob("*cameras-report*"))
     again = Project.load(str(out / f"{name}.plumbline"))
     assert again.camera_count == 3 and len(again.detections_of(2)) == 6 and again.more_cameras[0].options is not None

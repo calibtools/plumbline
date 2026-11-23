@@ -92,7 +92,7 @@ def write_rig_report(rig, first: list[Detection], second: list[Detection], path:
 
 def write_group_report(group, detections: list[list[Detection]], path: str | Path,
                        project_name: str = "Calibration", revision: int = 1,
-                       camera_reports: list[str] | None = None) -> int:
+                       camera_reports: list[str] | None = None, check=None) -> int:
     """Report on three or more cameras together: where each sits, and every set. Returns the number of pages."""
     writer = QPdfWriter(str(path))
     writer.setResolution(96)
@@ -118,7 +118,7 @@ def write_group_report(group, detections: list[list[Detection]], path: str | Pat
         p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
         _group_page(p, group, rows, project_name, revision, 1, pages, camera_reports)
         writer.newPage()
-        _group_detail_page(p, group, rows, project_name, 2, pages)
+        _group_detail_page(p, group, rows, project_name, 2, pages, check)
         for n in range(pages - 2):
             writer.newPage()
             _sets_page(p, rows[n * ROWS_PER_PAGE: (n + 1) * ROWS_PER_PAGE], project_name, n + 3, pages)
@@ -210,7 +210,27 @@ def _group_page(p, group, rows, project_name, revision, page, pages, camera_repo
         y += _text(p, M + 76, y, W - 76, more, T.sans(10), T.INK_MUTED, wrap=True) + 6
 
 
-def _group_detail_page(p, group, rows, project_name, page, pages) -> None:
+def _check_block(p, y, check, name: str, who: str, what: str) -> float:
+    """The check with images that took no part. Returns where the page goes on."""
+    W = PAGE_W - 2 * M
+    _eyebrow(p, M, y, "Checked with images that took no part", W)
+    y += 16
+    off = (check.scale - 1) * 100
+    y += _kv_table(p, M, y, W, [
+        ("Lengths come out", f"{off:+.3f} %" if abs(off) >= 0.0005 else "0.000 %"),
+        (name, f"{len(check.pairs)} used" + (f", {len(check.skipped)} not" if check.skipped else "")),
+        ("Length error, RMS", f"{check.length_error_rms_mm:.2f} mm"),
+        ("Largest error", f"{check.length_error_max_mm:.2f} mm"),
+        ("Out of flat, RMS", f"{check.flatness_rms_mm:.2f} mm"),
+        ("Lengths compared", f"{check.spans:,}, up to {check.longest_mm:.0f} mm")], cols=2) + 6
+    return y + _text(p, M, y, W,
+                     f"{who} measured lengths between points of the target in {what} of images that were not "
+                     "used for the calibration; these are compared with the target's own dimensions. + means measured "
+                     "too long. Out of flat is how far the measured points are from one plane.",
+                     T.sans(11), T.INK_MUTED, wrap=True) + 14
+
+
+def _group_detail_page(p, group, rows, project_name, page, pages, check=None) -> None:
     _frame(p, page, pages, project_name)
     W = PAGE_W - 2 * M
     y = M + 48
@@ -220,6 +240,8 @@ def _group_detail_page(p, group, rows, project_name, page, pages) -> None:
     y += 130 + 4
     y += _text(p, M, y, W, "px per set, RMS per point over all its images, in set order. A set without a bar "
                "takes no part.", T.sans(10), T.INK_MUTED) + 20
+    if check is not None:
+        y = _check_block(p, y, check, "Sets", "The cameras", "sets") + 6
 
     _eyebrow(p, M, y, "Findings")
     y += 16
@@ -315,21 +337,7 @@ def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports,
     y += 12
 
     if check is not None:
-        _eyebrow(p, M, y, "Checked with images that took no part", W)
-        y += 16
-        off = (check.scale - 1) * 100
-        y += _kv_table(p, M, y, W, [
-            ("Lengths come out", f"{off:+.3f} %" if abs(off) >= 0.0005 else "0.000 %"),
-            ("Pairs", f"{len(check.pairs)} used" + (f", {len(check.skipped)} not" if check.skipped else "")),
-            ("Length error, RMS", f"{check.length_error_rms_mm:.2f} mm"),
-            ("Largest error", f"{check.length_error_max_mm:.2f} mm"),
-            ("Out of flat, RMS", f"{check.flatness_rms_mm:.2f} mm"),
-            ("Lengths compared", f"{check.spans:,}, up to {check.longest_mm:.0f} mm")], cols=2) + 6
-        y += _text(p, M, y, W,
-                   "The two cameras measured lengths between points of the target in pairs of images that were not "
-                   "used for the calibration; these are compared with the target's own dimensions. + means measured "
-                   "too long. Out of flat is how far the measured points are from one plane.",
-                   T.sans(11), T.INK_MUTED, wrap=True) + 14
+        y = _check_block(p, y, check, "Pairs", "The two cameras", "pairs")
 
     chart_h = 130 if check is None else 96
     _eyebrow(p, M, y, "Error per pair")

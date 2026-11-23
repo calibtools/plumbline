@@ -248,7 +248,7 @@ def write_rig_yaml(rig, path: str | Path) -> None:
         fs.release()
 
 
-def group_summary(group, files: list[str] | None = None) -> dict:
+def group_summary(group, files: list[str] | None = None, check=None) -> dict:
     """Where each camera sits relative to camera 1, with every camera's own parameters alongside."""
     out = {
         "generator": f"Plumbline {__version__} by Calib.Tools, https://calib.tools",
@@ -265,11 +265,18 @@ def group_summary(group, files: list[str] | None = None) -> dict:
         out[f"camera_{c + 1}"] = result_summary(cam)
     if files:
         out["camera_files"] = {f"camera_{c + 1}": f for c, f in enumerate(files)}
+    if check is not None:
+        out["check_with_other_images"] = {
+            "note": "Sets of images that took no part in the calibration. The cameras measure lengths between points "
+                    "of the target; these are compared with the target's own dimensions. measured_over_true above 1 "
+                    "means lengths come out too long. In this block a pair is a set of images.",
+            **check.to_dict(),
+        }
     return out
 
 
-def write_group_json(group, path: str | Path, files: list[str] | None = None) -> None:
-    Path(path).write_text(json.dumps(group_summary(group, files), indent=2), encoding="utf-8")
+def write_group_json(group, path: str | Path, files: list[str] | None = None, check=None) -> None:
+    Path(path).write_text(json.dumps(group_summary(group, files, check), indent=2), encoding="utf-8")
 
 
 def write_group_yaml(group, path: str | Path) -> None:
