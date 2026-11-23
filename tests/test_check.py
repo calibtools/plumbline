@@ -100,7 +100,7 @@ def test_the_check_in_the_window(tmp_path, charuco, camera):
     bench.check_with(used[:4])
     assert bench.check is None and "took no part" in bench.status.text()
     bench.check_with([str(tmp_path / f"{side}_{i}.png") for side in ("left", "right") for i in range(3)])
-    assert bench.check is None and "cam1 / cam2" not in bench.status.text() and "1 / 2" in bench.status.text()
+    assert bench.check is None and "apart by 1 / 2 in their names" in bench.status.text()
 
     bench.check_with(held + used[:2])
     settle(bench)
@@ -141,3 +141,22 @@ def test_the_check_in_the_window(tmp_path, charuco, camera):
     bench._add_camera()
     assert bench.project.check_detections == [] and bench.check is None
     QSettings().setValue("project_counter", 0)
+
+
+def test_three_cameras_measure_the_board(charuco, camera):
+    from plumbline.core.check import check_sets
+    from plumbline.core.group import calibrate_group
+    from test_group import views
+
+    g = calibrate_group(views(charuco, [camera] * 3, [False] * 3, seed=3), charuco)
+    held = [d[8:] for d in views(charuco, [camera] * 3, [False] * 3, seed=4)]
+    c = check_sets(g, held, charuco)
+    assert len(c.pairs) == 8 and c.scale == pytest.approx(1.0, abs=0.002) and c.length_error_rms_mm < 0.3
+    # With two cameras it is the same check as for a pair.
+    two = calibrate_group(views(charuco, [camera] * 2, [False] * 2, seed=3), charuco)
+    rig = calibrate_pair(*views(charuco, [camera] * 2, [False] * 2, seed=3), charuco)
+    a, b = check_sets(two, [d[:6] for d in held[:2]], charuco), check_pairs(rig, held[0][:6], held[1][:6], charuco)
+    assert a.scale == pytest.approx(b.scale, abs=1e-5) and a.length_error_rms_mm == pytest.approx(b.length_error_rms_mm, abs=2e-3)
+    # A camera taken to be further away than it is: lengths no longer agree.
+    g.placed[1].translation = g.placed[1].translation * 1.02
+    assert check_sets(g, held, charuco).length_error_rms_mm > 3 * c.length_error_rms_mm
