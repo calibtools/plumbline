@@ -80,6 +80,8 @@ class BoardPlace:
     translation: np.ndarray = field(default_factory=lambda: np.zeros(3))  # rotation @ p + translation, mm
     angle_spread_deg: float = float("nan")    # how much the images disagree, RMS about the place given
     place_spread_mm: float = float("nan")
+    angle_std_deg: float = float("nan")       # with the boards fixed to each other: the ± of the place found
+    place_std_mm: float = float("nan")
 
     @property
     def angle_deg(self) -> float:
@@ -93,7 +95,8 @@ class BoardPlace:
         return {"board": self.board + 1, "images": self.images, "angle_deg": self.angle_deg, "apart_mm": self.apart_mm,
                 "rotation": [[float(v) for v in row] for row in self.rotation],
                 "translation_mm": [float(v) for v in self.translation],
-                "angle_spread_deg": self.angle_spread_deg, "place_spread_mm": self.place_spread_mm}
+                "angle_spread_deg": self.angle_spread_deg, "place_spread_mm": self.place_spread_mm,
+                "angle_std_deg": self.angle_std_deg, "place_std_mm": self.place_std_mm}
 
 
 def board_places(result, images: int, count: int) -> list[BoardPlace]:

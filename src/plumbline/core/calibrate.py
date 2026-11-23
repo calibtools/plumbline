@@ -93,6 +93,7 @@ class CalibrationResult:
     circle_shift_px: float | None = None  # mean perspective correction applied to circle centres, if any
     projection: "object | None" = None   # core.uncertainty.ProjectionUncertainty across the image, or None
     far: "object | None" = None          # core.farpoints.FarPoints: a trial without the far-off points
+    fixed: "object | None" = None        # core.rigid.FixedBoards: several boards solved as one object
 
     @property
     def rms_coordinate(self) -> float:
