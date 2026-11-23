@@ -35,6 +35,9 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
                            f"moved while the image was taken, even if {'it looks' if one else 'they look'} sharp. "
                            f"Try the result without {'it' if one else 'them'}; a lower error alone does not prove "
                            "a better result, so see whether the other values hold."))
+    steered = far_points(r, already=set(flagged))
+    if steered:
+        out.append((CHECK, steered))
     if coverage_share < 0.7:
         out.append((CHECK, f"{word} cover {coverage_share * 100:.0f} % of the image. "
                            "Add views that reach the empty cells in the coverage map."))
@@ -155,6 +158,32 @@ def model_sentence(result: CalibrationResult) -> str:
     if o.thin_prism:
         parts.append("thin prism terms s1 to s4")
     return ", ".join(parts) + "."
+
+
+def far_points(result: CalibrationResult, already: set[int] | None = None) -> str | None:
+    """A sentence when a handful of far-off points steers the result, or None.
+
+    `already`: images another finding has just named as standing above the rest. When the far-off
+    points sit in those, only what they do to the result is added.
+    """
+    far = result.far
+    if far is None or not far.matters:
+        return None
+    by_index = {v.index: v for v in result.views}
+    most = sorted(far.by_view.items(), key=lambda kv: -kv[1])
+    # Name the images that hold most of them; a point or two scattered elsewhere is not worth a name.
+    named = [i for i, k in most if k >= max(2, most[0][1] // 4)][:3] or [most[0][0]]
+    names = ", ".join(Path(by_index[i].path).stem for i in named if i in by_index)
+    k = far.dropped
+    moves = (f"{far.name} would be {abs(far.shift):.2f} px {'higher' if far.shift > 0 else 'lower'}, more than its "
+             f"± of {far.std:.2f} px")
+    if already and set(named) <= already:
+        return (f"Without the {k} points furthest from the fit, nearly all in {'that image' if len(named) == 1 else 'those images'}, "
+                f"{moves}. The result shown here includes all points.")
+    return (f"{k} point{'' if k == 1 else 's'} lie{'s' if k == 1 else ''} far from the fit, mostly in {names}. "
+            f"Without {'it' if k == 1 else 'them'} {moves}: {'it is' if k == 1 else 'they are'} steering "
+            "the result. Look for corners found in the wrong place or for movement, and exclude an image if you "
+            "find a cause. The result shown here includes all points.")
 
 
 def unseen_lines(result: CalibrationResult) -> dict[str, int]:
