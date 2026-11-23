@@ -104,6 +104,21 @@ def test_a_chain_of_four_cameras(charuco, camera):
     assert np.linalg.norm(g.placed[2].position_std) > 1.5 * np.linalg.norm(direct.placed[2].position_std)
 
 
+def test_four_cameras_in_a_ring(charuco, camera):
+    """As the chain, and camera 4 also sees the board with camera 1: both ways round count in the fit."""
+    pairs = [(0, 1), (1, 2), (2, 3), (3, 0)]
+    together = {i: pairs[i // 5] for i in range(20)}
+    hide = {(c, i) for i, there in together.items() for c in range(4) if c not in there}
+    dets = views(charuco, [camera] * 4, [False] * 4, count=20, hide=hide)
+    ring = calibrate_group(dets, charuco)
+    assert all(within(p, *off(p)) for p in ring.placed)
+    assert ring.placed[2].through == 0                       # camera 4 is started from camera 1 directly
+    # Without the closing sets camera 3, in the middle, is known less well.
+    open_chain = calibrate_group([[d if i < 15 else Detection(d.path, d.width, d.height, d.ids[:0], d.corners[:0])
+                                   for i, d in enumerate(one)] for one in dets], charuco)
+    assert np.linalg.norm(ring.placed[1].position_std) < np.linalg.norm(open_chain.placed[1].position_std)
+
+
 def test_six_cameras(charuco, camera):
     g = calibrate_group(views(charuco, [camera] * 6, [False] * 6, count=12), charuco)
     assert len(g.placed) == 5 and all(p.through == 0 for p in g.placed)
