@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
     QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
@@ -43,6 +43,7 @@ from .widgets import (
     label, open_site, rule,
 )
 
+MOST_ROWS = 5      # cameras listed on the left before the list scrolls
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp)"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -151,6 +152,11 @@ class Workbench(QWidget):
             return self.rig.second if camera else self.rig.first
         return None if self.project.second_camera else self._result
 
+    @staticmethod
+    def _found(good: int, total: int) -> str:
+        """The line under step 3; with many images the long form does not fit the step."""
+        return f"{good} good · {total - good} to check" if total < 100 else f"{good} of {total} good"
+
     def _add_cam_row(self, i: int) -> None:
         row_ = frame("sheet")
         row_.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -173,7 +179,7 @@ class Workbench(QWidget):
         b_ = QPushButton("")
         b_.setCursor(Qt.CursorShape.PointingHandCursor)
         b_.clicked.connect(lambda _on, which=i: self._select_camera(which))
-        self.tabs_row.insertWidget(i, b_)
+        self.tabs_row.insertWidget(i + 1, b_)
         self.cam_tabs.append(b_)
 
     def _sync_cameras(self) -> None:
@@ -244,7 +250,18 @@ class Workbench(QWidget):
         cb.setContentsMargins(16, 0, 16, 2)
         cb.setSpacing(6)
         cb.addWidget(label("CAMERAS", "eyebrow"))
-        self.cams_layout = cb
+        # The rows sit in a scroll area: with many cameras the list stops growing and scrolls, so the table keeps its room.
+        rows_host = QWidget()
+        self.cams_layout = QVBoxLayout(rows_host)
+        self.cams_layout.setContentsMargins(0, 0, 0, 0)
+        self.cams_layout.setSpacing(6)
+        self.cams_scroll = QScrollArea()
+        self.cams_scroll.setWidgetResizable(True)
+        self.cams_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.cams_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.cams_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        self.cams_scroll.setWidget(rows_host)
+        cb.addWidget(self.cams_scroll)
         self.cam_rows = []
         for i in range(2):
             self._add_cam_row(i)
@@ -641,6 +658,8 @@ class Workbench(QWidget):
         self.tabs_row = QHBoxLayout()
         self.tabs_row.setSpacing(12)
         self.cam_tabs = []
+        self.tabs_word = label("CAMERA", "eyebrow")      # with many cameras the tabs are numbers only
+        self.tabs_row.addWidget(self.tabs_word)
         self.tabs_row.addStretch(1)
         for i in range(2):
             self._add_cam_tab(i)
@@ -1655,7 +1674,7 @@ class Workbench(QWidget):
                 ("done" if t else "next", t.short_label if t else "Check the settings"),
                 ("done" if n_images else "next" if t else "off", f"{count} cameras · {n} {'pairs' if count == 2 else 'sets'}" if n_images else "Add images"),
                 ("done" if dets else "next" if n_images and t else "off",
-                 f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
+                 self._found(good, len(dets)) if dets else "Find the target"),
                 ("done" if rig else "next" if good else "off", f"RMS {rig.rms_point:.2f} px" if rig else "Solve the cameras"),
                 ("next" if rig else "off", "Files and report"),
             ]
@@ -1721,7 +1740,7 @@ class Workbench(QWidget):
             ("done" if t else "next", t.short_label if t else "Check the settings"),
             ("done" if n else "next" if t else "off", f"{n} loaded" if n else "Add images"),
             ("done" if dets else "next" if n and t else "off",
-             f"{good} good · {len(dets) - good} to check" if dets else "Find the target"),
+             Workbench._found(good, len(dets)) if dets else "Find the target"),
             ("done" if r else "next" if good else "off", f"RMS {r.rms_point:.2f} px" if r else "Solve the camera"),
             ("next" if r else "off", "Files and report"),
         ]
@@ -1778,9 +1797,16 @@ class Workbench(QWidget):
                             + "Select this camera: images are added to it, and its own result is shown.")
             res = self._result_of(i) if two else None
             err.setText(f"{res.rms_point:.3f} px" if res is not None else "")
+        # The list shows up to MOST_ROWS cameras and scrolls beyond that.
+        row_h = self.cam_rows[0][0].sizeHint().height()
+        showing = min(max(count, 2), MOST_ROWS)
+        self.cams_scroll.setFixedHeight(showing * row_h + (showing - 1) * self.cams_layout.spacing())
+        if two and self._cam < len(self.cam_rows):
+            QTimer.singleShot(0, lambda row_=self.cam_rows[self._cam][0]: self.cams_scroll.ensureWidgetVisible(row_, 0, 0))
+        self.tabs_word.setVisible(count > 4)
         for i, b_ in enumerate(self.cam_tabs):
             on = i == self._cam
-            b_.setText(f"CAM {i + 1}" if many else f"CAMERA {i + 1}")
+            b_.setText(f"CAMERA {i + 1}" if not many else f"CAM {i + 1}" if count <= 4 else f"{i + 1}")
             b_.setStyleSheet(
                 f'border: 0; border-bottom: 2px solid {T.INK if on else "transparent"}; background: transparent; '
                 f'padding: 0 0 2px 0; min-height: 0; color: {T.INK if on else T.INK_MUTED}; '
