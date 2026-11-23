@@ -14,8 +14,9 @@ OPENING = """\
 These downloads are not signed yet, so Windows and macOS ask before they open the app the first time.
 
 - **Windows** (`…-windows-x64-setup.exe`): if "Windows protected your PC" appears, choose *More info*, then *Run anyway*.
-- **macOS** (`…-macos-arm64.dmg` for Apple silicon, `…-macos-x64.dmg` for Intel): drag Plumbline to Applications. The first
-  time, open it with a right-click and *Open*; if macOS still refuses, allow it under *System Settings › Privacy & Security*.
+- **macOS** (`…-macos-arm64.dmg` for Apple silicon, `…-macos-x64.dmg` for Intel): drag Plumbline to Applications and open it.
+  macOS says it could not verify the app: choose *Done*, open *System Settings › Privacy & Security*, scroll to *Security*
+  and choose *Open Anyway* next to Plumbline, then confirm. This is needed once.
 - **Linux** (`…-linux-x86_64.AppImage`, or the smaller `.tar.xz`): make the AppImage executable (`chmod +x`) and run it.
 
 `SHA256SUMS.txt` lists the checksum of every file.

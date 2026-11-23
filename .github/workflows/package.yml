@@ -3,7 +3,8 @@ name: Installers
 # Builds the compressed download for each platform and starts the installed app once.
 # Unsigned: signing and notarization need the owner's certificates.
 # A tag "v<version>", for example v0.1.0-beta.1, builds the same downloads and puts them into a draft release for the owner to look
-# over and publish. Nothing is published by the tag alone.
+# over and publish. Nothing is published by the tag alone. When the release was made by hand first, the
+# downloads are added to it.
 on:
   pull_request:
     paths: ["packaging/**", ".github/workflows/package.yml", "pyproject.toml", "src/**"]
@@ -155,6 +156,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" downloads/* --draft --prerelease \
-            --title "Plumbline ${GITHUB_REF_NAME#v}" --notes-file notes.md
+          # A release made by hand on the website (which is what creates the tag there) gets the files added;
+          # a tag pushed on its own gets a draft release to look over and publish.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" downloads/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" downloads/* --draft --prerelease \
+              --title "Plumbline ${GITHUB_REF_NAME#v}" --notes-file notes.md
+          fi
 
