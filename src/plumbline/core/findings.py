@@ -30,8 +30,11 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
     if flagged:
         by_index = {v.index: v for v in r.views}
         names = ", ".join(Path(by_index[i].path).stem for i in flagged[:3])
-        out.append((CHECK, f"{names} stand well above the rest. Look at them; a lower error "
-                           "after excluding an image does not by itself mean a better result."))
+        one = len(flagged) == 1
+        out.append((CHECK, f"{names} stand{'s' if one else ''} well above the rest. Often the target or the camera "
+                           f"moved while the image was taken, even if {'it looks' if one else 'they look'} sharp. "
+                           f"Try the result without {'it' if one else 'them'}; a lower error alone does not prove "
+                           "a better result, so see whether the other values hold."))
     if coverage_share < 0.7:
         out.append((CHECK, f"{word} cover {coverage_share * 100:.0f} % of the image. "
                            "Add views that reach the empty cells in the coverage map."))

@@ -105,6 +105,33 @@ def render(
                           rng=rng, noise_sigma=noise_sigma, blur=blur, background=background)
 
 
+def render_moving(
+    target: Target,
+    camera: Camera,
+    rvec: np.ndarray,
+    tvec: np.ndarray,
+    shift_mm: float,
+    rng: np.random.Generator | None = None,
+    bands: int = 12,
+) -> np.ndarray:
+    """The target moving sideways by `shift_mm` while the rows of the image are read out one after another.
+
+    This is what a rolling-shutter camera makes of a hand-held board that is not quite still:
+    every band of rows sees the board in a slightly different place. No single board pose fits
+    such an image, so its reprojection error stands out, although it looks sharp.
+    """
+    out = None
+    for b in range(bands):
+        t = np.asarray(tvec, np.float64).ravel().copy()
+        t[0] += shift_mm * ((b + 0.5) / bands - 0.5)
+        img = render(target, camera, rvec, t, rng)
+        if out is None:
+            out = np.empty_like(img)
+        rows = slice(b * img.shape[0] // bands, (b + 1) * img.shape[0] // bands)
+        out[rows] = img[rows]
+    return out
+
+
 def render_texture(
     tex: np.ndarray,
     px_per_mm: float,

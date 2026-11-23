@@ -45,6 +45,23 @@ def test_sample_images_run_from_start_window_to_export(tmp_path, monkeypatch):
     assert r.rms_point < 0.5
     assert bench.steps[4]._status.text() == "Files and report"
 
+    # Two of the sample images are spoiled on purpose; they are the two worst by far, and the sample says so.
+    from plumbline.app import SAMPLE_SPOILED
+
+    errors = sorted(r.views, key=lambda v: -v.rms_point)
+    assert {v.index for v in errors[:2]} == set(SAMPLE_SPOILED) and errors[1].rms_point > 2.5 * errors[2].rms_point
+    assert r.rms_point > 0.09 and "spoiled on purpose" in bench.status.text()
+    for i in SAMPLE_SPOILED:
+        bench._toggle(i)
+        _wait(app, win)
+    better = bench.result
+    assert better.rms_point < 0.06 and abs(better.fx - 1500) < abs(r.fx - 1500)
+    assert "spoiled on purpose" not in bench.status.text()      # said once
+    for i in SAMPLE_SPOILED:
+        bench._toggle(i)
+        _wait(app, win)
+    r = bench.result
+
     first = r.views[2].index
     bench._toggle(first)
     _wait(app, win)
