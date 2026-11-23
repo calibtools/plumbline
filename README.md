@@ -36,7 +36,7 @@ Several boards in every image (one camera, ChArUco, AprilGrid or ArUco grid, up 
 
 Boards fixed to each other (tick box under Boards per image): boards that form one rigid object, for example two boards on a bracket, are solved as one object. An image then has one position instead of one per board, and every further board has one place on the object, found by the same fit together with the camera and given with its ±. The same points have fewer unknowns to settle and the object is not flat, so the camera is pinned down better. If the images fit clearly worse this way than with every board on its own, the boards moved against each other, and Plumbline says so.
 
-Not yet: signed installers, other wide-lens models, several boards with several cameras, projectors.
+Not yet: signed installers, other wide-lens models, several boards with several cameras in the window (the fit itself takes them: each board in each set of images counts as a set of its own, and in the tests two boards place the cameras about a third more firmly than one), projectors.
 
 Every result so far has been checked with rendered images only. Checks with photographs of real boards are still to come.
 
