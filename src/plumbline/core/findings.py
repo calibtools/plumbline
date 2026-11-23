@@ -37,6 +37,9 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
                            "Add views that reach the empty cells in the coverage map."))
     else:
         out.append((PASS, f"{word} cover {coverage_share * 100:.0f} % of the image."))
+    missing = never_seen(r)
+    if missing:
+        out.append((CHECK, missing))
     u = r.uncertainty
     board = r.board
     misfit = r.pattern is not None and r.pattern.has_pattern
@@ -149,6 +152,54 @@ def model_sentence(result: CalibrationResult) -> str:
     if o.thin_prism:
         parts.append("thin prism terms s1 to s4")
     return ", ".join(parts) + "."
+
+
+def unseen_lines(result: CalibrationResult) -> dict[str, int]:
+    """Whole rows and columns of board points that no image used for the result shows.
+
+    Counted from each edge of the board inwards (top, bottom, left, right, as the board is
+    drawn on the Target tab), plus `inside` for whole lines that are missing between seen ones.
+    """
+    stats = result.points
+    if stats is None:
+        return {}
+    board = np.asarray(result.target.object_points(), np.float64)[:, :2]
+    seen = np.zeros(len(board), bool)
+    seen[np.asarray(stats.ids)[np.asarray(stats.count) > 0]] = True
+    out = {}
+    for axis, (first, last) in ((1, ("top", "bottom")), (0, ("left", "right"))):
+        places = np.round(board[:, axis], 3)
+        lines = [bool(seen[places == v].any()) for v in np.unique(places)]
+        if not any(lines):
+            return {}
+        lead = lines.index(True)
+        tail = lines[::-1].index(True)
+        out[first], out[last] = lead, tail
+        out["inside"] = out.get("inside", 0) + lines[lead:len(lines) - tail].count(False)
+    return {k: v for k, v in out.items() if v}
+
+
+def never_seen(result: CalibrationResult) -> str | None:
+    """A sentence when whole rows or columns of the board never show, or None."""
+    lines = unseen_lines(result)
+    word = result.target.point_word
+    edges = []
+    for side, kind in (("top", "row"), ("bottom", "row"), ("left", "column"), ("right", "column")):
+        k = lines.get(side, 0)
+        if k:
+            edges.append(f"the {k} {kind}s nearest the {side} edge" if k > 1 else f"the {kind} nearest the {side} edge")
+    if edges:
+        where = edges[0] if len(edges) == 1 else ", ".join(edges[:-1]) + " and " + edges[-1]
+        return (f"No image shows {where} of the board's {word} (edges as drawn on the Target tab). If that part of "
+                "the board is always outside the picture, add images that show it. If the board in your hands has "
+                "fewer rows or columns than entered, correct the target settings so that the result and the "
+                "files describe the board you have.")
+    if lines.get("inside"):
+        k = lines["inside"]
+        return (f"{k} whole row{'' if k == 1 else 's'} or column{'' if k == 1 else 's'} of {word} inside the board "
+                "never show in any image, although those around them do. Check that the target settings match "
+                "the board: pattern, dictionary and the number of the first marker.")
+    return None
 
 
 def rig_findings(rig) -> list[tuple[str, str]]:

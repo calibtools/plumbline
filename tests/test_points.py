@@ -94,3 +94,35 @@ def test_misplaced_point_reaches_excel_and_the_image_view(tmp_path, charuco, cam
     assert view.grab().toImage() != plain
     view.set_image(gray, dets[0].corners, None, "test")   # a new image starts without rings
     assert view.grab().toImage() == plain
+
+
+def test_rows_and_columns_no_image_shows(charuco, camera):
+    """A whole line of points missing from every image is said, with the edge it is on."""
+    from plumbline.core import lens, synth
+    from plumbline.core.calibrate import calibrate
+    from plumbline.core.detect import Detection
+    from plumbline.core.findings import CHECK, findings, never_seen, unseen_lines
+
+    rng = np.random.default_rng(5)
+    board = charuco.object_points().astype(np.float64)
+    cols = charuco.inner_cols
+
+    def views(keep):
+        out = []
+        for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 10, 7)):
+            p = lens.project(board, r, t, camera.K, camera.dist, False)
+            ok = (p[:, 0] > 5) & (p[:, 0] < camera.width - 5) & (p[:, 1] > 5) & (p[:, 1] < camera.height - 5) & keep
+            out.append(Detection(f"v{i}.png", camera.width, camera.height, np.nonzero(ok)[0].astype(np.int32),
+                                 (p[ok] + rng.normal(0, 0.05, (int(ok.sum()), 2))).astype(np.float32)))
+        return out
+
+    everything = calibrate(views(np.ones(len(board), bool)), charuco)
+    assert unseen_lines(everything) == {} and never_seen(everything) is None
+    column = np.arange(len(board)) % cols
+    row = np.arange(len(board)) // cols
+    cut = calibrate(views((column < cols - 2) & (row > 0)), charuco)
+    assert unseen_lines(cut) == {"top": 1, "right": 2}
+    said = [text for tag, text in findings(cut, 0.8) if tag == CHECK and "No image shows" in text]
+    assert len(said) == 1 and "the row nearest the top edge and the 2 columns nearest the right edge" in said[0]
+    hole = calibrate(views(row != 3), charuco)
+    assert unseen_lines(hole) == {"inside": 1} and "inside the board" in never_seen(hole)
