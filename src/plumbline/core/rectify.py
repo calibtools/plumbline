@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .. import __version__
+from .. import VERSION_NAME
 from . import lens
 from .rig import RigResult
 
@@ -87,6 +87,6 @@ def write_rectify_maps(rig: RigResult, path: str | Path) -> Rectification:
         R1=r.R1, R2=r.R2, P1=r.P1, P2=r.P2, Q=r.Q,
         image_size=np.array(r.size, np.int32),
         aligned_along=np.array("columns" if r.vertical else "rows"),
-        generator=np.array(f"Plumbline {__version__} by Calib.Tools, https://calib.tools"),
+        generator=np.array(f"Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools"),
     )
     return r

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from .. import __version__
+from .. import VERSION_NAME
 from ..core.project import is_due
 from . import theme as T
 from .widgets import ClickLabel, LinkLabel, SvgMark, button, frame, label, open_site, rule
@@ -22,14 +22,14 @@ def question_mailto() -> str:
 
     body = (
         "\n\n\n---\n"
-        f"Plumbline {__version__}\n"
+        f"Plumbline {VERSION_NAME}\n"
         f"OpenCV {cv2.__version__}\n"
         f"{platform.system()} {platform.release()} ({platform.machine()})\n"
     )
     return f"mailto:hello@calib.tools?subject={quote('Plumbline question')}&body={quote(body)}"
 
 
-VERSION_LINE = "Version 0.1 · early release"
+VERSION_LINE = f"Version {VERSION_NAME}"
 
 
 def recent_projects() -> list[dict]:
@@ -320,7 +320,7 @@ class WelcomePage(QWidget):
         h.setContentsMargins(20, 0, 20, 0)
         h.addWidget(label(f"Built on OpenCV {cv2.__version__}", font=T.mono(12), color=T.INK_MUTED))
         h.addStretch(1)
-        h.addWidget(label(f"Plumbline {__version__} · early release ·", font=T.mono(12), color=T.INK_MUTED))
+        h.addWidget(label(f"Plumbline {VERSION_NAME} ·", font=T.mono(12), color=T.INK_MUTED))
         link = LinkLabel("calib.tools", T.site_url(where="footer"))
         link.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 12px; color: {T.RED_TEXT};')
         h.addWidget(link)

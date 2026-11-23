@@ -1,6 +1,6 @@
 """Notes for a release: that version's section of CHANGELOG.md, then how to open an unsigned download.
 
-    python tools/release_notes.py 0.1.0
+    python tools/release_notes.py 0.1.0-beta.1
 """
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ def section(changelog: str, version: str) -> str:
 
 def notes(version: str, root: Path | None = None) -> str:
     root = root or Path(__file__).resolve().parent.parent
-    version = re.sub(r"(\.dev|rc|a|b)\d+$", "", version)      # a trial build carries the notes of the version it leads to
+    # A beta or a release candidate carries the notes of the version it leads to: 0.1.0b1 and 0.1.0-beta.1 read 0.1.0.
+    version = re.sub(r"(\.dev|rc|a|b)\d+$|-(alpha|beta|rc|dev)\.\d+$", "", version)
     return section((root / "CHANGELOG.md").read_text(encoding="utf-8"), version) + "\n\n" + OPENING
 
 

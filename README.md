@@ -79,7 +79,7 @@ python -m plumbline
 
 ## Releases
 
-`CHANGELOG.md` lists what each version brings. A tag `v<version>` that matches the version in `src/plumbline/__init__.py` builds the four downloads, starts each installed app once, and collects them with checksums into a draft release; the draft is published by hand. About (bottom right in the app) shows the version details a problem report needs and starts an e-mail with them; the app itself sends nothing.
+`CHANGELOG.md` lists what each version brings. The version is set in one place, `src/plumbline/__init__.py`; the app shows it as `0.1.0 beta 1` and every download carries it in its name (`Plumbline-0.1.0-beta.1-windows-x64-setup.exe`, `…-macos-arm64.dmg`, `…-macos-x64.dmg`, `…-linux-x86_64.AppImage`). A tag of the same form, `v0.1.0-beta.1`, builds the four downloads, starts each installed app once, and collects them with checksums into a draft release; the draft is published by hand. About (bottom right in the app) shows the version details a problem report needs and starts an e-mail with them; the app itself sends nothing.
 
 ## Earlier browser version
 
