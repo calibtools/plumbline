@@ -92,6 +92,7 @@ class CalibrationResult:
     board: "object | None" = None         # core.board.BoardShape: the board as the images see it
     circle_shift_px: float | None = None  # mean perspective correction applied to circle centres, if any
     projection: "object | None" = None   # core.uncertainty.ProjectionUncertainty across the image, or None
+    far: "object | None" = None          # core.farpoints.FarPoints: a trial without the far-off points
 
     @property
     def rms_coordinate(self) -> float:
@@ -303,6 +304,14 @@ def calibrate(
 
     result.points = point_statistics(result, detections)
     result.pattern = residual_pattern(result, detections)
+    # A trial without the points furthest from the fit: does a handful of them steer the result?
+    from . import farpoints
+
+    try:
+        result.far = farpoints.look(obj_pts, img_pts, used, size, options, K, dist, rvecs, tvecs, uncertainty,
+                                    lambda o, p, guess: _solve(o, p, size, options, guess=guess), rms_point)
+    except (CalibrationError, np.linalg.LinAlgError, cv2.error):
+        result.far = None      # the result stands; only this look is left out
     return result
 
 

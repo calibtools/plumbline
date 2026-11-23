@@ -126,3 +126,49 @@ def test_rows_and_columns_no_image_shows(charuco, camera):
     assert len(said) == 1 and "the row nearest the top edge and the 2 columns nearest the right edge" in said[0]
     hole = calibrate(views(row != 3), charuco)
     assert unseen_lines(hole) == {"inside": 1} and "inside the board" in never_seen(hole)
+
+
+def test_a_few_far_off_points_that_steer_the_result(charuco, camera):
+    """A trial without the far-off points; said only when it moves the camera by more than its stated uncertainty."""
+    from plumbline.core import lens, synth
+    from plumbline.core.calibrate import calibrate
+    from plumbline.core.detect import Detection
+    from plumbline.core.findings import CHECK, far_points, findings
+
+    board = charuco.object_points().astype(np.float64)
+
+    def views(seed, moved=None):
+        rng = np.random.default_rng(seed)
+        out = []
+        for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 16, 7)):
+            p = lens.project(board, r, t, camera.K, camera.dist, False)
+            ok = (p[:, 0] > 5) & (p[:, 0] < camera.width - 5) & (p[:, 1] > 5) & (p[:, 1] < camera.height - 5)
+            c = p[ok] + rng.standard_t(6, (int(ok.sum()), 2)) * 0.05      # longer tails than a bell curve, as detection has
+            if moved and i == 4:
+                for k, by in moved.items():
+                    c[k] += by
+            out.append(Detection(f"view-{i + 1:02d}.png", camera.width, camera.height, np.nonzero(ok)[0].astype(np.int32),
+                                 c.astype(np.float32)))
+        return out
+
+    for seed in (1, 2, 3):
+        clean = calibrate(views(seed), charuco)
+        assert clean.far is not None and clean.far.dropped <= 3 and not clean.far.matters and far_points(clean) is None
+    # Two corners of one image found in the wrong place: the look finds them, but they move the camera by less
+    # than its stated uncertainty, so nothing is said.
+    mild = calibrate(views(1, {10: (3.0, -2.5), 30: (-2.0, 2.0)}), charuco)
+    assert mild.far.by_view[4] >= 2 and not mild.far.matters and far_points(mild) is None
+    # Four corners in a row found 6 px off: they drag that image's whole fit with them, and it is said.
+    r = calibrate(views(1, {k: (5.0, -4.0) for k in range(4)}), charuco)
+    assert r.far.matters and max(r.far.by_view, key=r.far.by_view.get) == 4
+    assert "mostly in view-05." in far_points(r) and "includes all points" in far_points(r)
+    # That image already stands above the rest and is named for it; then only what the points do is added.
+    said = [text for tag, text in findings(r, 0.8) if tag == CHECK]
+    assert any("view-05 stands well above" in text for text in said)
+    assert sum("furthest from the fit, nearly all in that image" in text for text in said) == 1
+    assert r.rms_point > 3 * calibrate(views(1), charuco).rms_point         # nothing was taken out of the result itself
+    # The trial lands closer to the camera the images were made with than the reported value does.
+    name = r.far.name
+    true = {"fx": camera.K[0, 0], "fy": camera.K[1, 1], "cx": camera.K[0, 2], "cy": camera.K[1, 2]}[name]
+    reported = {"fx": r.fx, "fy": r.fy, "cx": r.cx, "cy": r.cy}[name]
+    assert abs(reported + r.far.shift - true) < abs(reported - true)
