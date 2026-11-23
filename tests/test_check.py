@@ -110,8 +110,24 @@ def test_the_check_in_the_window(tmp_path, charuco, camera):
     assert bench.status.text().endswith("2 images of the calibration left out.")
     rig = bench.rig
 
+    # The check goes into the file and the report about both cameras.
+    import json
+
+    from plumbline.ui.report import write_rig_report
+
+    out = tmp_path / "out"
+    out.mkdir()
+    bench.export_to(str(out), formats={"json"})
+    said = json.loads((out / f"{bench.project.name}-cameras.json").read_text())["check_with_other_images"]
+    assert said["measured_over_true"] == c.scale and len(said["pairs"]) == len(c.pairs)
+    two = [bench.project.detections, bench.project.second_detections]
+    assert write_rig_report(rig, *two, out / "with.pdf", check=c) == write_rig_report(rig, *two, out / "without.pdf")
+    assert (out / "with.pdf").stat().st_size > (out / "without.pdf").stat().st_size
+
     # The check belongs to the result it was made with: a new calibration clears it.
     bench._toggle(0)
     settle(bench)
     assert bench.rig is not rig and bench.check is None and bench.check_box.isHidden()
+    bench.export_to(str(out), formats={"json"})
+    assert "check_with_other_images" not in (out / f"{bench.project.name}-r2-cameras.json").read_text()
     QSettings().setValue("project_counter", 0)

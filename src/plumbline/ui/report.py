@@ -57,7 +57,7 @@ def write_report(
 
 def write_rig_report(rig, first: list[Detection], second: list[Detection], path: str | Path,
                      project_name: str = "Calibration", revision: int = 1,
-                     camera_reports: tuple[str, str] | None = None) -> int:
+                     camera_reports: tuple[str, str] | None = None, check=None) -> int:
     """Report on two cameras together: where camera 2 sits, and every pair. Returns the number of pages."""
     writer = QPdfWriter(str(path))
     writer.setResolution(96)
@@ -81,7 +81,7 @@ def write_rig_report(rig, first: list[Detection], second: list[Detection], path:
     p = QPainter(writer)
     try:
         p.scale(writer.width() / PAGE_W, writer.height() / PAGE_H)
-        _rig_page(p, rig, rows, project_name, revision, 1, pages, camera_reports)
+        _rig_page(p, rig, rows, project_name, revision, 1, pages, camera_reports, check)
         for n in range(pages - 1):
             writer.newPage()
             _pairs_page(p, rows[n * ROWS_PER_PAGE: (n + 1) * ROWS_PER_PAGE], project_name, n + 2, pages)
@@ -253,7 +253,7 @@ def _sets_page(p, rows, project_name, page, pages) -> None:
     _ruled_table(p, y, cols, body)
 
 
-def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports) -> None:
+def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports, check=None) -> None:
     _frame(p, page, pages, project_name)
     W = PAGE_W - 2 * M
     y = M + 48
@@ -314,10 +314,28 @@ def _rig_page(p, rig, rows, project_name, revision, page, pages, camera_reports)
         y += _text(p, M + 76, y, W - 76, more, T.sans(10), T.INK_MUTED, wrap=True) + 6
     y += 12
 
+    if check is not None:
+        _eyebrow(p, M, y, "Checked with images that took no part", W)
+        y += 16
+        off = (check.scale - 1) * 100
+        y += _kv_table(p, M, y, W, [
+            ("Lengths come out", f"{off:+.3f} %" if abs(off) >= 0.0005 else "0.000 %"),
+            ("Pairs", f"{len(check.pairs)} used" + (f", {len(check.skipped)} not" if check.skipped else "")),
+            ("Length error, RMS", f"{check.length_error_rms_mm:.2f} mm"),
+            ("Largest error", f"{check.length_error_max_mm:.2f} mm"),
+            ("Out of flat, RMS", f"{check.flatness_rms_mm:.2f} mm"),
+            ("Lengths compared", f"{check.spans:,}, up to {check.longest_mm:.0f} mm")], cols=2) + 6
+        y += _text(p, M, y, W,
+                   "The two cameras measured lengths between points of the target in pairs of images that were not "
+                   "used for the calibration; these are compared with the target's own dimensions. + means measured "
+                   "too long. Out of flat is how far the measured points are from one plane.",
+                   T.sans(11), T.INK_MUTED, wrap=True) + 14
+
+    chart_h = 130 if check is None else 96
     _eyebrow(p, M, y, "Error per pair")
     y += 16
-    _error_chart(p, QRectF(M, y, W, 130), [(r[4], r[5] == "excluded") for r in rows])
-    y += 130 + 4
+    _error_chart(p, QRectF(M, y, W, chart_h), [(r[4], r[5] == "excluded") for r in rows])
+    y += chart_h + 4
     y += _text(p, M, y, W, "px per pair, RMS per point over both images, in pair order. A pair without a bar "
                "takes no part.", T.sans(10), T.INK_MUTED) + 18
 

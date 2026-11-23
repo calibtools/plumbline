@@ -1219,7 +1219,7 @@ class Workbench(QWidget):
             both = rig_files(name, revision)
             own = tuple(export_files(name, revision, cam)["json" if "json" in formats else "opencv_yaml"] for cam in (1, 2))
             export.write_rig_json(rig, base / both["rig_json"],
-                                  own if formats & {"json", "opencv_yaml"} else None)
+                                  own if formats & {"json", "opencv_yaml"} else None, self.check)
             export.write_rig_yaml(rig, base / both["rig_yaml"])
             written += [both["rig_json"], both["rig_yaml"]]
             if formats & {"maps", "example"}:      # the two-camera example reads the tables
@@ -1231,7 +1231,7 @@ class Workbench(QWidget):
             if "report" in formats:
                 write_rig_report(rig, self.project.detections, self.project.second_detections,
                                  base / both["rig_report"], name, revision,
-                                 tuple(export_files(name, revision, cam)["report"] for cam in (1, 2)))
+                                 tuple(export_files(name, revision, cam)["report"] for cam in (1, 2)), self.check)
                 written.append(both["rig_report"])
         elif group is not None:
             count = len(group.cameras)

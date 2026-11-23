@@ -180,7 +180,7 @@ def write_opencv_xml(result: CalibrationResult, path: str | Path) -> None:
 
 
 # ------------------------------------------------------------- two cameras
-def rig_summary(rig, files: tuple[str, str] | None = None) -> dict:
+def rig_summary(rig, files: tuple[str, str] | None = None, check=None) -> dict:
     """How camera 2 sits relative to camera 1, with both cameras' own parameters alongside."""
     from .rectify import rectify   # here, not at the top: rectify builds on rig, which builds on this package
 
@@ -204,11 +204,18 @@ def rig_summary(rig, files: tuple[str, str] | None = None) -> dict:
     }
     if files:
         out["camera_files"] = {"camera_1": files[0], "camera_2": files[1]}
+    if check is not None:
+        out["check_with_other_images"] = {
+            "note": "Pairs of images that took no part in the calibration. The two cameras measure lengths between "
+                    "points of the target; these are compared with the target's own dimensions. measured_over_true "
+                    "above 1 means lengths come out too long.",
+            **check.to_dict(),
+        }
     return out
 
 
-def write_rig_json(rig, path: str | Path, files: tuple[str, str] | None = None) -> None:
-    Path(path).write_text(json.dumps(rig_summary(rig, files), indent=2), encoding="utf-8")
+def write_rig_json(rig, path: str | Path, files: tuple[str, str] | None = None, check=None) -> None:
+    Path(path).write_text(json.dumps(rig_summary(rig, files, check), indent=2), encoding="utf-8")
 
 
 def write_rig_yaml(rig, path: str | Path) -> None:
