@@ -20,6 +20,9 @@ from . import lens
 # does by more than one. At 8 a clean set loses none or one or two points and moves by a third at most,
 # while a corner misplaced by 2 px, or an image taken while the board moved, still shows.
 FAR = 8.0
+# The trial is said to matter when a parameter moves by more than this many of the uncertainties it would have
+# in the trial. Clean rendered sets stay under 0.4 with a standard lens and under 1.7 with a fisheye; spoiled ones give 3 to 8.
+MATTERS = 2.5
 ROUNDS = 6
 MIN_LEFT = 6     # an image with fewer points left takes no part in the trial
 
@@ -30,15 +33,16 @@ class FarPoints:
     by_view: dict[int, int] = field(default_factory=dict)   # image index -> points set aside in it
     name: str = "fx"                               # the camera parameter that moves most, against its own uncertainty
     shift: float = 0.0                             # trial value minus reported value, pixels
-    std: float = float("nan")                      # the reported uncertainty of that parameter
+    std: float = float("nan")                      # the uncertainty that parameter would have in the trial
     rms_point: float = float("nan")                # error of the trial
 
     @property
     def matters(self) -> bool:
-        return self.std == self.std and self.std > 0 and abs(self.shift) > self.std
+        return self.std == self.std and self.std > 0 and abs(self.shift) > MATTERS * self.std
 
 
-def look(obj_pts, img_pts, indices, size, options, K, dist, rvecs, tvecs, uncertainty, solve) -> FarPoints | None:
+def look(obj_pts, img_pts, indices, size, options, K, dist, rvecs, tvecs, uncertainty, solve,
+         rms_reported: float) -> FarPoints | None:
     """Trial solve without the far-off points. `solve(obj, img, guess)` runs the solver once."""
     if uncertainty is None:
         return None
@@ -75,7 +79,9 @@ def look(obj_pts, img_pts, indices, size, options, K, dist, rvecs, tvecs, uncert
     for name, (was, now) in values.items():
         if name not in uncertainty.names:
             continue
-        std = float(uncertainty.std[uncertainty.names.index(name)])
+        # The stated uncertainty grows with the scatter, and the far-off points are most of the scatter:
+        # scaled to the trial's error it is what the parameter's uncertainty would be without them.
+        std = float(uncertainty.std[uncertainty.names.index(name)]) * float(rms) / rms_reported
         ratio = abs(now - was) / std if std > 0 else 0.0
         if best is None or ratio > best[0]:
             best = (ratio, name, float(now - was), std)

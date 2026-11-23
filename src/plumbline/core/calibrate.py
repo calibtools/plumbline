@@ -309,7 +309,7 @@ def calibrate(
 
     try:
         result.far = farpoints.look(obj_pts, img_pts, used, size, options, K, dist, rvecs, tvecs, uncertainty,
-                                    lambda o, p, guess: _solve(o, p, size, options, guess=guess))
+                                    lambda o, p, guess: _solve(o, p, size, options, guess=guess), rms_point)
     except (CalibrationError, np.linalg.LinAlgError, cv2.error):
         result.far = None      # the result stands; only this look is left out
     return result

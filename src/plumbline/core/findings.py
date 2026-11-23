@@ -175,8 +175,8 @@ def far_points(result: CalibrationResult, already: set[int] | None = None) -> st
     named = [i for i, k in most if k >= max(2, most[0][1] // 4)][:3] or [most[0][0]]
     names = ", ".join(Path(by_index[i].path).stem for i in named if i in by_index)
     k = far.dropped
-    moves = (f"{far.name} would be {abs(far.shift):.2f} px {'higher' if far.shift > 0 else 'lower'}, more than its "
-             f"± of {far.std:.2f} px")
+    moves = (f"{far.name} would be {abs(far.shift):.2f} px {'higher' if far.shift > 0 else 'lower'}, "
+             f"{abs(far.shift) / far.std:.0f} times the ± it would then have ({far.std:.2f} px)")
     if already and set(named) <= already:
         return (f"Without the {k} points furthest from the fit, nearly all in {'that image' if len(named) == 1 else 'those images'}, "
                 f"{moves}. The result shown here includes all points.")
