@@ -157,8 +157,33 @@ def test_two_boards_in_the_window(tmp_path):
     settle(bench)
     assert bench.boards.value() == 2 and bench.result is not None and not bench.boards_part.isHidden()
 
+    # The boards as one object: a tick box that shows with two boards; each further board's place gets a ± of its own.
+    assert not bench.boards_fixed.isHidden() and not bench.boards_fixed.isChecked() and "tick" in bench.boards_note.text()
+    free = bench.result
+    bench.boards_fixed.setChecked(True)
+    assert bench.project.boards_fixed and bench.result is None and "Calibrate again" in bench.status.text()
+    bench.run_calibration()
+    settle(bench)
+    one = bench.result
+    assert one is not None and one.fixed is not None and not one.fixed.loose and "as one object" in bench.status.text()
+    assert [v.index for v in one.views] == [v.index for v in free.views]
+    std = lambda r: float(r.uncertainty.std[r.uncertainty.names.index("fx")])     # noqa: E731
+    assert std(one) < std(free) and abs(one.fx - camera.K[0, 0]) < 8
+    angle = bench.boards_grid.itemAtPosition(1, 1).widget().text()
+    assert float(angle.split(" ")[0]) == pytest.approx(50.0, abs=0.3) and float(angle.split("± ")[1]) < 0.2
+    assert "one object" in bench.boards_note.text() and bench._view_for(1).corner_count > 0
+    bench.export_to(str(out), formats={"json"})
+    newest = lambda pattern: max(out.glob(pattern), key=lambda f: f.stat().st_mtime_ns)     # noqa: E731
+    said = json.loads(newest("*-camera.json").read_text())["boards"]
+    assert said["fixed_to_each_other"] is True and said["fit"]["loose"] is False
+    assert said["seen_from_board_1"][0]["place_std_mm"] < 1.0
+    assert Project.load(str(newest("*.plumbline"))).boards_fixed is True
+    bench.boards_fixed.setChecked(False)
+    assert not bench.project.boards_fixed and bench.result is None
+
     # Back to one board: what was found goes, as with any change of the target.
     bench.boards.setValue(1)
+    assert bench.boards_fixed.isHidden()
     assert bench.project.board_count == 1 and not bench.project.board_detections and bench.result is None
     QSettings().setValue("project_counter", 0)
 
