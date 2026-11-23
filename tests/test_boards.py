@@ -161,3 +161,104 @@ def test_two_boards_in_the_window(tmp_path):
     bench.boards.setValue(1)
     assert bench.project.board_count == 1 and not bench.project.board_detections and bench.result is None
     QSettings().setValue("project_counter", 0)
+
+
+def test_three_boards_each_seen_from_board_1(camera):
+    """Board 2 folded forward on the right of board 1, board 3 folded forward on its left."""
+    board = Target(CHARUCO, 7, 5, 30.0, 22.0, "DICT_5X5_250")
+    wide = Target(CHARUCO, 21, 5, 30.0, 22.0, "DICT_5X5_250")       # board 3, board 1, board 2 laid flat: for the poses only
+    pts = board.object_points().astype(np.float64)
+    R_13 = rot([0, np.deg2rad(40), 0])
+    T_13 = -R_13 @ np.array([225.0, 0.0, 0.0])                     # its right edge 15 mm left of board 1
+    rng = np.random.default_rng(5)
+    per_board = [[], [], []]
+    for i, (r, t) in enumerate(synth.sample_poses(wide, camera, 16, 11)):
+        R = rot(r)
+        t = R @ np.array([210.0, 0.0, 0.0]) + np.asarray(t, np.float64).ravel()      # board 1 is the middle third
+        for b, (Rb, tb) in enumerate(((R, t), (R @ R_12, R @ T_12 + t), (R @ R_13, R @ T_13 + t))):
+            p = lens.project(pts, cv2.Rodrigues(Rb)[0].ravel(), tb, camera.K, camera.dist, False)
+            ok = (p[:, 0] > 5) & (p[:, 0] < camera.width - 5) & (p[:, 1] > 5) & (p[:, 1] < camera.height - 5)
+            per_board[b].append(Detection(f"view-{i + 1:02d}.png", camera.width, camera.height,
+                                          np.nonzero(ok)[0].astype(np.int32),
+                                          (p[ok] + rng.normal(0, 0.06, (int(ok.sum()), 2))).astype(np.float32)))
+    n = len(per_board[0])
+    one = calibrate(per_board[0], board)
+    two = calibrate(together(per_board[:2]), board)
+    three = calibrate(together(per_board), board)
+    std = lambda r: float(r.uncertainty.std[r.uncertainty.names.index("fx")])     # noqa: E731
+    print("views", len(one.views), len(two.views), len(three.views), "fx", one.fx, two.fx, three.fx,
+          "std", std(one), std(two), std(three))
+    assert len(three.views) > len(two.views) > len(one.views)
+    assert std(three) < std(two) < std(one) and abs(three.fx - camera.K[0, 0]) < 3 * std(three)
+    assert together(per_board)[2 * n].path.endswith("[board 3]")
+    second, third = board_places(three, n, 3)
+    print("board 2", second.images, second.angle_deg, second.translation, "board 3", third.images, third.angle_deg, third.translation)
+    assert (second.board, third.board) == (1, 2) and second.images >= 6 and third.images >= 6
+    assert second.angle_deg == pytest.approx(50.0, abs=0.4) and np.linalg.norm(second.translation - T_12) < 1.0
+    assert third.angle_deg == pytest.approx(40.0, abs=0.4) and np.linalg.norm(third.translation - T_13) < 1.0
+    # An image left out is left out with all three boards.
+    assert excluded_views({1}, n, 3) == {1, n + 1, 2 * n + 1}
+
+
+def grid_pair(kind, fold_deg, gap_mm, count=10):
+    """Rendered images of two 4 x 3 marker grids, board 2 to the right of board 1; returns boards, what was found, where board 2 is."""
+    from plumbline.core.detect import detect
+    from plumbline.core.targets import APRILGRID, ARUCO_GRID
+
+    camera = synth.default_camera()
+    code, dictionary = (APRILGRID, "DICT_APRILTAG_36h11") if kind == "aprilgrid" else (ARUCO_GRID, "DICT_5X5_250")
+    first, wide = Target(code, 4, 3, 40.0, 12.0, dictionary), Target(code, 8, 3, 40.0, 12.0, dictionary)
+    boards = board_targets(first, 2)
+    assert boards[1].first_marker_id == 12
+    fold, T = rot([0, np.deg2rad(-fold_deg), 0]), np.array([4 * 52.0 + gap_mm, 0.0, 0.0])
+    rng = np.random.default_rng(9)
+    per_board = [[], []]
+    for i, (r, t) in enumerate(synth.sample_poses(wide, camera, count, 7)):
+        R, t = rot(r), np.asarray(t, np.float64).ravel()
+        a = synth.render(boards[0], camera, r, t, None).astype(np.float32)
+        b = synth.render(boards[1], camera, cv2.Rodrigues(R @ fold)[0].ravel(), R @ T + t, None).astype(np.float32)
+        img = np.where(np.abs(b - 120) > 2, b, a)          # board 2 in front where both cover a pixel
+        img = np.clip(img + rng.normal(0, 2.0, img.shape), 0, 255).astype(np.uint8)
+        for k in range(2):
+            per_board[k].append(detect(img, boards[k], f"both-{i + 1:02d}.png"))
+    return camera, boards, per_board, T
+
+
+@pytest.mark.parametrize("kind", ["aprilgrid", "aruco_grid"])
+def test_two_marker_grids_found_in_rendered_images(kind):
+    """Each board is found by its own numbers in an image that shows both, and neither takes the other's markers."""
+    camera, boards, per_board, T = grid_pair(kind, 20.0, 60.0)
+    usable = [sum(d.usable for d in dets) for dets in per_board]
+    print(kind, "usable", usable, "points", [sum(d.count for d in dets) for dets in per_board])
+    assert min(usable) >= 8
+    # Corner numbers stay inside one board: 4 corners for each of its 12 markers.
+    assert all(d.ids.max() < 48 for dets in per_board for d in dets if d.count)
+    result = calibrate(together(per_board), boards[0])
+    (place,) = board_places(result, 10, 2)
+    print(kind, "fx", result.fx, "rms", result.rms_point, "angle", place.angle_deg, "at", place.translation, "from", place.images,
+          "far", result.far.matters if result.far else None)
+    assert result.rms_point < 0.2 and abs(result.fx - camera.K[0, 0]) < 12
+    assert place.images >= 8 and place.angle_deg == pytest.approx(20.0, abs=0.6) and np.linalg.norm(place.translation - T) < 1.5
+    assert result.far is None or not result.far.matters
+
+
+@pytest.mark.parametrize("kind", ["aprilgrid", "aruco_grid"])
+def test_a_board_in_front_of_another_hides_part_of_a_marker(kind):
+    """Board 2 folded towards the camera covers the edge of board 1 in some images.
+
+    A marker that is partly covered is still read, with corners a few pixels out. Nothing at
+    detection can tell (in a wide lens the neighbours disagree by more than that anyway); the
+    calibration can, and says so.
+    """
+    from plumbline.core.findings import far_points
+
+    camera, boards, per_board, _T = grid_pair(kind, 50.0, 10.0)
+    result = calibrate(together(per_board), boards[0])
+    print(kind, "rms", result.rms_point, "fx", result.fx, "far", result.far and (result.far.dropped, dict(result.far.by_view),
+                                                                               result.far.shift, result.far.std, result.far.rms_point))
+    assert result.rms_point > 0.3
+    assert result.far is not None and result.far.matters and result.far.rms_point < 0.12
+    assert 4 in result.far.by_view                         # image 5, board 1: its right-hand column is behind board 2
+    said = far_points(result)
+    print([f.text for f in said] if isinstance(said, list) else said)
+    assert said

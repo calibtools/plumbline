@@ -182,7 +182,7 @@ def far_points(result: CalibrationResult, already: set[int] | None = None) -> st
                 f"{moves}. The result shown here includes all points.")
     return (f"{k} point{'' if k == 1 else 's'} lie{'s' if k == 1 else ''} far from the fit, mostly in {names}. "
             f"Without {'it' if k == 1 else 'them'} {moves}: {'it is' if k == 1 else 'they are'} steering "
-            "the result. Look for corners found in the wrong place or for movement, and exclude an image if you "
+            "the result. Look for corners found in the wrong place, something in front of the board, or movement, and exclude an image if you "
             "find a cause. The result shown here includes all points.")
 
 
