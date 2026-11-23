@@ -868,6 +868,7 @@ class Workbench(QWidget):
             self.project.target = target
             had = any(d.count for d in self.project.detections)
             self.project.detections = []
+            self.project.drop_check()      # found with the old target settings
             self.project.excluded = set()
             self.result = None
             if had:
@@ -981,6 +982,7 @@ class Workbench(QWidget):
             self._say(f"A project holds up to {MOST_CAMERAS} cameras.")
             return
         self._cam = self._other = p.add_camera()
+        p.drop_check()
         self.result = None
         if p.camera_count == 2:
             self._say("Camera 2 added. Add its images: they pair with camera 1's in file-name order.")
@@ -999,6 +1001,7 @@ class Workbench(QWidget):
                 != QMessageBox.StandardButton.Yes:
             return
         p.remove_last_camera()
+        p.drop_check()
         if not p.second_camera:
             self.own_model.blockSignals(True)
             self.own_model.setChecked(False)
@@ -1157,7 +1160,7 @@ class Workbench(QWidget):
 
             def done_rig(rig: RigResult):
                 self.rig = rig
-                self.check = None       # a check belongs to the result it was made with
+                self.check = self._check_again(rig)     # a check belongs to the result it was made with
                 self._result = rig.second if self._cam else rig.first
                 self.project.last_rms_point = rig.rms_point
                 self.tabs.setCurrentIndex(2)
@@ -1354,9 +1357,15 @@ class Workbench(QWidget):
                 dets.append(detect_file(q, target))
                 progress(i + 1, len(every))
             half = len(split.first)
-            return check_pairs(rig, dets[:half], dets[half:], target)
+            return dets[:half], dets[half:]
 
-        def done(result: CheckResult):
+        def done(found):
+            try:
+                result = check_pairs(rig, found[0], found[1], target)
+            except ValueError as e:
+                self._say(str(e))
+                return
+            self.project.check_detections = [list(found[0]), list(found[1])]     # kept with the project
             self.check = result
             said = (f"Checked with {len(result.pairs)} pairs: lengths come out {(result.scale - 1) * 100:+.3f} %, "
                     f"error {result.length_error_rms_mm:.2f} mm RMS.")
@@ -1370,6 +1379,16 @@ class Workbench(QWidget):
             self._say(message)
 
         self._start(job, done, "Checking", failed)
+
+    def _check_again(self, rig) -> CheckResult | None:
+        """The check with the images kept for it, for a new result of the same two cameras."""
+        kept = self.project.check_detections
+        if len(kept) != 2 or self.project.target is None:
+            return None
+        try:
+            return check_pairs(rig, kept[0], kept[1], self.project.target)
+        except ValueError:
+            return None
 
     def _fill_check(self) -> None:
         two = self.project.camera_count == 2
