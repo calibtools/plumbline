@@ -109,7 +109,7 @@ class Workbench(QWidget):
         self.check: CheckResult | None = None   # two cameras: the result checked with images that took no part
         self._result: CalibrationResult | None = None
         self._cam = 0                           # the camera whose images are added to and whose result is shown
-        self._left_out = ""                     # said once more after the calibration that follows adding images
+        self._left_out = ""                     # said once, after the calibration that follows adding images
         self._worker: Worker | None = None
         self._current = -1
 
@@ -1180,7 +1180,8 @@ class Workbench(QWidget):
             self.result = result
             self.project.last_rms_point = result.rms_point
             self.tabs.setCurrentIndex(2)
-            self._say(f"Calibrated from {len(result.views)} images, RMS {result.rms_point:.3f} px.")
+            self._say(f"Calibrated from {len(result.views)} images, RMS {result.rms_point:.3f} px." + self._left_out)
+            self._left_out = ""
             self._refresh()
 
         self._start(lambda _p: calibrate(dets, target, options, excluded), done, "Calibrating")

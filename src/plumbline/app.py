@@ -23,6 +23,10 @@ from .ui.workbench import Workbench
 
 SAMPLE_TARGET = Target(CHARUCO, 11, 8, 30.0, 22.0, "DICT_5X5_250")
 SAMPLE_COUNT = 24
+# Two of the sample images are spoiled on purpose: the board moved by this much (mm) while the image was read out.
+# They look like the others; their error does not. Leaving them out is what the sample is there to show.
+SAMPLE_SPOILED = {6: 2.0, 17: -2.0}
+SAMPLE_HINT = " Two are spoiled on purpose: exclude the two tall bars."
 
 
 class MainWindow(QMainWindow):
@@ -83,7 +87,7 @@ class MainWindow(QMainWindow):
             )
 
     def try_sample(self):
-        folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)) / "sample-charuco"
+        folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)) / "sample-charuco-2"
         paths = [folder / f"sample-{i + 1:02d}.png" for i in range(SAMPLE_COUNT)]
         if all(p.exists() for p in paths):
             self._open_sample(paths)
@@ -100,7 +104,10 @@ class MainWindow(QMainWindow):
             camera = synth.default_camera()
             rng = np.random.default_rng(1007)
             for i, (r, t) in enumerate(synth.sample_poses(SAMPLE_TARGET, camera, SAMPLE_COUNT)):
-                img = synth.render(SAMPLE_TARGET, camera, r, t, rng)
+                if i in SAMPLE_SPOILED:
+                    img = synth.render_moving(SAMPLE_TARGET, camera, r, t, SAMPLE_SPOILED[i], rng)
+                else:
+                    img = synth.render(SAMPLE_TARGET, camera, r, t, rng)
                 ok, buf = cv2.imencode(".png", img)
                 buf.tofile(str(paths[i]))
                 progress(i + 1, SAMPLE_COUNT)
@@ -117,6 +124,7 @@ class MainWindow(QMainWindow):
         self.bench.load_project(Project(target=SAMPLE_TARGET, title="Sample-ChArUco"))
         self.stack.setCurrentWidget(self.bench)
         self.bench.add_images([str(p) for p in paths])
+        self.bench._left_out = SAMPLE_HINT       # said once, after the first calibration
 
     def _saved(self, path: str, target: str, rms, due=None):
         remember_project(path, target, rms, due)
