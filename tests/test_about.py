@@ -13,7 +13,7 @@ def test_details_name_the_program_and_the_computer_only():
 
     text = details()
     lines = text.splitlines()
-    assert lines[0] == f"Plumbline {plumbline.__version__}" and len(lines) == 6
+    assert lines[0] == f"Plumbline {plumbline.VERSION_NAME}" and len(lines) == 6
     assert any(line.startswith("OpenCV ") for line in lines) and any(line.startswith("Qt ") for line in lines)
     # Nothing about the user: no home folder, no user name, no host name.
     home = os.path.expanduser("~")
@@ -65,10 +65,35 @@ def test_release_notes_come_from_the_changelog():
     import release_notes
 
     # The version in the code has a section; a tag "v<version>" will find its notes.
-    base = plumbline.__version__.split(".dev")[0]
+    base = plumbline.VERSION_FILE.split("-")[0]
     text = release_notes.notes(base, root)
-    assert release_notes.notes(plumbline.__version__, root) == text == release_notes.notes(base + "rc1", root)
+    assert release_notes.notes(plumbline.__version__, root) == text == release_notes.notes(plumbline.VERSION_FILE, root)
+    assert release_notes.notes(base + "rc1", root) == text == release_notes.notes(base + "-rc.2", root)
     assert "First public version" in text and "Opening the download" in text and "## " + base not in text
     assert release_notes.section("## 0.2.0\nnew\n\n## 0.1.0\nold\n", "0.2.0") == "new"
     with pytest.raises(ValueError, match="no section"):
         release_notes.section("## 0.1.0\nold\n", "9.9.9")
+
+
+def test_the_version_reads_the_same_everywhere():
+    """One version, written three ways: for Python packaging, for people, for file names."""
+    import re
+    from pathlib import Path
+
+    from plumbline import VERSION_FILE, VERSION_NAME, __version__, version_names
+
+    assert version_names("0.1.0b1") == ("0.1.0 beta 1", "0.1.0-beta.1")
+    assert version_names("0.1.0rc2") == ("0.1.0 rc 2", "0.1.0-rc.2")
+    assert version_names("1.2.0") == ("1.2.0", "1.2.0")
+    assert version_names("0.2.0.dev3") == ("0.2.0 dev 3", "0.2.0-dev.3")
+    with pytest.raises(ValueError):
+        version_names("next")
+    assert (VERSION_NAME, VERSION_FILE) == version_names(__version__)
+    root = Path(__file__).resolve().parent.parent
+    declared = re.search(r'^version = "([^"]+)"', (root / "pyproject.toml").read_text(), re.M).group(1)
+    assert declared == __version__
+    # File names carry no spaces and nothing a shell or a web address would trip over.
+    assert re.fullmatch(r"[0-9A-Za-z.-]+", VERSION_FILE)
+    # The downloads and the tag are named from the file form.
+    workflow = (root / ".github" / "workflows" / "package.yml").read_text()
+    assert workflow.count("steps.v.outputs.file") >= 6 and "Plumbline-${{ steps.v.outputs.file }}-${{ matrix.name }}" in workflow

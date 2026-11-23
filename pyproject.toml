@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plumbline-calib"
-version = "0.1.0.dev0"
+version = "0.1.0b1"
 description = "Camera calibration software by Calib.Tools"
 readme = "README.md"
 license = { text = "MIT" }

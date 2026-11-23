@@ -12,7 +12,7 @@ from PySide6.QtCore import QUrl, Qt, qVersion
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
-from .. import __version__
+from .. import VERSION_NAME
 from . import theme as T
 from .widgets import LinkLabel, button, frame, label, rule
 
@@ -30,7 +30,7 @@ def details() -> str:
     else:
         os_line = f"{system} {platform.release()} ({platform.machine()})"
     return "\n".join((
-        f"Plumbline {__version__}",
+        f"Plumbline {VERSION_NAME}",
         f"OpenCV {cv2.__version__}",
         f"Qt {qVersion()} (PySide6 {pyside_version})",
         f"NumPy {np.__version__}",
@@ -43,7 +43,7 @@ def report_url() -> str:
     """An e-mail to Calib.Tools, started with the details; the user writes what happened and sends it themselves."""
     body = ("What I did:\n\n\nWhat I expected:\n\n\nWhat happened instead:\n\n\n"
             "(Images or the project file help. Attach them if you can share them.)\n\n---\n" + details() + "\n")
-    return f"mailto:{REPORT_TO}?subject={quote('Plumbline ' + __version__ + ': problem report')}&body={quote(body)}"
+    return f"mailto:{REPORT_TO}?subject={quote('Plumbline ' + VERSION_NAME + ': problem report')}&body={quote(body)}"
 
 
 class AboutDialog(QDialog):
@@ -58,7 +58,7 @@ class AboutDialog(QDialog):
         v.setSpacing(12)
         v.addWidget(label("PLUMBLINE", "eyebrow"))
         v.addWidget(label("Camera calibration software by Calib.Tools", font=T.sans(18, 600), color=T.INK))
-        v.addWidget(label("Early release. Results have been checked with rendered images so far, not yet with "
+        v.addWidget(label("Beta. Results have been checked with rendered images so far, not yet with "
                           "photographs of real boards. Compare with a method you trust before relying on it.",
                           "small", wrap=True))
         box = frame("sheet")

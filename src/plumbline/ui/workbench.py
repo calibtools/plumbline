@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from .. import __version__
+from .. import VERSION_NAME
 from ..core import export, lens
 from ..core.catalog import find_board, same_geometry, stock_boards
 from ..core.calibrate import (
@@ -757,7 +757,7 @@ class Workbench(QWidget):
         h.setContentsMargins(20, 0, 20, 0)
         self.status = label("", font=T.mono(12), color=T.INK_MUTED)
         h.addWidget(self.status, 1)
-        h.addWidget(label(f"OpenCV {cv2.__version__} · Plumbline {__version__} · early release ·",
+        h.addWidget(label(f"OpenCV {cv2.__version__} · Plumbline {VERSION_NAME} ·",
                           font=T.mono(12), color=T.INK_MUTED))
         link = LinkLabel("calib.tools", T.site_url(where="footer"))
         link.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 12px; color: {T.RED_TEXT};')

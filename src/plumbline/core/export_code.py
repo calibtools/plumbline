@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import __version__
+from .. import VERSION_NAME
 from . import lens
 from .calibrate import CalibrationResult
 
@@ -28,7 +28,7 @@ def write_maps(result: CalibrationResult, path: str | Path) -> None:
         distortion_coefficients=result.distortion,
         image_size=np.array(size, np.int32),
         distortion_model=np.array("opencv_fisheye" if result.fisheye else "opencv"),
-        generator=np.array(f"Plumbline {__version__} by Calib.Tools, https://calib.tools"),
+        generator=np.array(f"Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools"),
     )
 
 
@@ -46,7 +46,7 @@ def load_maps(path=HERE / "{maps_file}"):
 """
     return f'''"""Use this camera calibration in your own program.
 
-Written by Plumbline {__version__} by Calib.Tools, https://calib.tools
+Written by Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools
 Camera file: {camera_file}
 Lens model:  OpenCV {model} model, image {result.image_width} x {result.image_height}
 
@@ -146,7 +146,7 @@ def rig_example_script(maps_file: str, vertical: bool = False) -> str:
     along, across = ("column", "row") if vertical else ("row", "column")
     return f'''"""Use this two-camera calibration in your own program.
 
-Written by Plumbline {__version__} by Calib.Tools, https://calib.tools
+Written by Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools
 Lookup tables: {maps_file}
 
 Run it on one pair of images taken at the same moment:

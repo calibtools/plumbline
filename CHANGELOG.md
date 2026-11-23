@@ -1,11 +1,11 @@
 # Changes
 
 What changed in each version of Plumbline, newest first. Versions follow the pattern `0.minor.patch` until the
-first stable release.
+first stable release. Builds before a release are numbered betas: `0.1.0 beta 1`, in file names `0.1.0-beta.1`.
 
-## 0.1.0 (not yet released)
+## 0.1.0 (in beta)
 
-First public version.
+First public version. Current build: 0.1.0 beta 1.
 
 One camera
 - Targets: ChArUco, checkerboard, circle grid, asymmetric circle grid, AprilGrid (Kalibr layout), ArUco grid; Calib.Tools boards by part number

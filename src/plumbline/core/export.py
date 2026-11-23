@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .. import __version__
+from .. import VERSION_NAME
 from .calibrate import CalibrationResult
 from .lens import STANDARD_NAMES as DIST_NAMES  # kept under the old name for callers
 
@@ -29,7 +29,7 @@ def result_summary(result: CalibrationResult) -> dict:
     """Plain-data form of a result, used by the JSON export and the project file."""
     dist = result.distortion.tolist()
     return {
-        "generator": f"Plumbline {__version__} by Calib.Tools",
+        "generator": f"Plumbline {VERSION_NAME} by Calib.Tools",
         "opencv_version": result.opencv_version,
         "model": model_name(result),
         "image_width": result.image_width,
@@ -79,7 +79,7 @@ def opencv_yaml(result: CalibrationResult) -> str:
             if result.fisheye else "")
     return (
         "%YAML:1.0\n---\n"
-        f"# Written by Plumbline {__version__} by Calib.Tools, https://calib.tools\n"
+        f"# Written by Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools\n"
         f"{note}"
         f'distortion_model: "{model_name(result)}"\n'
         f"image_width: {result.image_width}\n"
@@ -126,7 +126,7 @@ def ros_camera_info(result: CalibrationResult, camera_name: str = "camera") -> s
     R = np.eye(3)
     d = result.distortion
     return (
-        f"# Written by Plumbline {__version__} by Calib.Tools, https://calib.tools\n"
+        f"# Written by Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools\n"
         f"image_width: {result.image_width}\n"
         f"image_height: {result.image_height}\n"
         f"camera_name: {camera_name}\n"
@@ -154,7 +154,7 @@ def write_opencv_xml(result: CalibrationResult, path: str | Path) -> None:
     """
     fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE | cv2.FILE_STORAGE_FORMAT_XML)
     try:
-        fs.write("generator", f"Plumbline {__version__} by Calib.Tools, https://calib.tools")
+        fs.write("generator", f"Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools")
         fs.write("opencv_version", result.opencv_version)
         fs.write("distortion_model", model_name(result))
         fs.write("image_width", int(result.image_width))
@@ -189,7 +189,7 @@ def rig_summary(rig, files: tuple[str, str] | None = None, check=None) -> dict:
     except cv2.error:
         rectification = None
     out = {
-        "generator": f"Plumbline {__version__} by Calib.Tools, https://calib.tools",
+        "generator": f"Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools",
         "convention": "x2 = rotation @ x1 + translation_mm: a point in camera 1 coordinates, in camera 2 coordinates. "
                       "Camera axes as in OpenCV: x to the right, y down, z the way the camera looks.",
         **rig.to_dict(),
@@ -222,7 +222,7 @@ def write_rig_yaml(rig, path: str | Path) -> None:
     """OpenCV FileStorage YAML with both cameras and R, T, as cv2.stereoRectify and cv::fisheye take them."""
     fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE)
     try:
-        fs.writeComment(f"Written by Plumbline {__version__} by Calib.Tools, https://calib.tools")
+        fs.writeComment(f"Written by Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools")
         fs.writeComment("R, T: x2 = R * x1 + T, mm. K1, D1 belong to camera 1; K2, D2 to camera 2.")
         for n, cam in ((1, rig.first), (2, rig.second)):
             fs.write(f"distortion_model_{n}", model_name(cam))
@@ -251,7 +251,7 @@ def write_rig_yaml(rig, path: str | Path) -> None:
 def group_summary(group, files: list[str] | None = None, check=None) -> dict:
     """Where each camera sits relative to camera 1, with every camera's own parameters alongside."""
     out = {
-        "generator": f"Plumbline {__version__} by Calib.Tools, https://calib.tools",
+        "generator": f"Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools",
         "convention": "x = rotation @ x1 + translation_mm: a point in camera 1 coordinates, in that camera's "
                       "coordinates. Camera axes as in OpenCV: x to the right, y down, z the way the camera looks.",
         "camera_count": len(group.cameras),
@@ -283,7 +283,7 @@ def write_group_yaml(group, path: str | Path) -> None:
     """OpenCV FileStorage YAML with every camera and, for cameras 2 and up, R and T from camera 1."""
     fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE)
     try:
-        fs.writeComment(f"Written by Plumbline {__version__} by Calib.Tools, https://calib.tools")
+        fs.writeComment(f"Written by Plumbline {VERSION_NAME} by Calib.Tools, https://calib.tools")
         fs.writeComment("Rn, Tn: xn = Rn * x1 + Tn, mm. Kn, Dn belong to camera n.")
         fs.write("camera_count", int(len(group.cameras)))
         for n, cam in enumerate(group.cameras, 1):

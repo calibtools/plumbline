@@ -9,7 +9,7 @@ from PySide6.QtCore import QMarginsF, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFontMetricsF, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen
 from PySide6.QtSvg import QSvgRenderer
 
-from .. import __version__
+from .. import VERSION_NAME
 from ..core.calibrate import CalibrationResult, coverage_grid
 from ..core.detect import Detection
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, group_findings, model_sentence, rig_findings
@@ -36,7 +36,7 @@ def write_report(
     writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
     writer.setTitle(f"{project_name} calibration report, revision {revision}")
-    writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
+    writer.setCreator(f"Plumbline {VERSION_NAME} by Calib.Tools")
 
     rows = _image_rows(result, detections)
     pages = 2 + max(1, -(-len(rows) // ROWS_PER_PAGE))
@@ -64,7 +64,7 @@ def write_rig_report(rig, first: list[Detection], second: list[Detection], path:
     writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
     writer.setTitle(f"{project_name} calibration report for two cameras, revision {revision}")
-    writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
+    writer.setCreator(f"Plumbline {VERSION_NAME} by Calib.Tools")
     used = {q.index: q for q in rig.pairs}
     rows = []
     for i in range(max(len(first), len(second))):
@@ -99,7 +99,7 @@ def write_group_report(group, detections: list[list[Detection]], path: str | Pat
     writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
     writer.setTitle(f"{project_name} calibration report for {len(group.cameras)} cameras, revision {revision}")
-    writer.setCreator(f"Plumbline {__version__} by Calib.Tools")
+    writer.setCreator(f"Plumbline {VERSION_NAME} by Calib.Tools")
     used = {q.index: q for q in group.sets}
     rows = []
     for i in range(max(len(d) for d in detections)):
@@ -520,7 +520,7 @@ def _summary_page(p, r: CalibrationResult, detections, project_name, revision, p
     facts = [
         ("Target", r.target.describe()),
         ("Lens model", model_sentence(r)),
-        ("Software", f"Plumbline {__version__}, OpenCV {r.opencv_version}"),
+        ("Software", f"Plumbline {VERSION_NAME}, OpenCV {r.opencv_version}"),
     ]
     for k, v in facts:
         _text(p, M, y, 90, k, T.sans(11), T.INK_MUTED)

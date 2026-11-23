@@ -2,7 +2,7 @@ name: Installers
 
 # Builds the compressed download for each platform and starts the installed app once.
 # Unsigned: signing and notarization need the owner's certificates.
-# A tag "v<version>" builds the same downloads and puts them into a draft release for the owner to look
+# A tag "v<version>", for example v0.1.0-beta.1, builds the same downloads and puts them into a draft release for the owner to look
 # over and publish. Nothing is published by the tag alone.
 on:
   pull_request:
@@ -37,13 +37,14 @@ jobs:
       - name: Version
         id: v
         shell: bash
-        run: echo "version=$(python -c 'import plumbline; print(plumbline.__version__)')" >> "$GITHUB_OUTPUT"
+        # The version as it goes into file names and the tag: 0.1.0b1 in the code reads 0.1.0-beta.1 here.
+        run: echo "file=$(python -c 'import plumbline; print(plumbline.VERSION_FILE)')" >> "$GITHUB_OUTPUT"
       - name: The tag must name the version in the code
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          if [ "${GITHUB_REF_NAME}" != "v${{ steps.v.outputs.version }}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match version ${{ steps.v.outputs.version }} in src/plumbline/__init__.py"; exit 1
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.v.outputs.file }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match v${{ steps.v.outputs.file }}, the version in src/plumbline/__init__.py"; exit 1
           fi
       - name: Build the app
         run: pyinstaller packaging/plumbline.spec --noconfirm
@@ -55,7 +56,7 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc "/DAppVersion=${{ steps.v.outputs.version }}" packaging\windows.iss
+          & $iscc "/DAppVersion=${{ steps.v.outputs.file }}" packaging\windows.iss
           Get-ChildItem dist\installer
       - name: Install it and start the installed app
         if: runner.os == 'Windows'
@@ -80,7 +81,7 @@ jobs:
           # hdiutil now and then answers "Resource busy" on hosted runners; a second try goes through.
           for attempt in 1 2 3 4 5; do
             if hdiutil create -volname "Plumbline" -srcfolder dist/dmg -ov -format ULMO \
-              "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.dmg"; then break; fi
+              "dist/installer/Plumbline-${{ steps.v.outputs.file }}-${{ matrix.name }}.dmg"; then break; fi
             if [ "$attempt" = 5 ]; then exit 1; fi
             sleep 10
           done
@@ -107,8 +108,8 @@ jobs:
           # The AppImage tool in use only packs with zstd; the tar.xz below is the smaller download.
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run --comp zstd \
             --mksquashfs-opt -Xcompression-level --mksquashfs-opt 22 \
-            AppDir "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.AppImage"
-          tar -C dist -cf - Plumbline | xz -6 -T0 > "dist/installer/Plumbline-${{ steps.v.outputs.version }}-${{ matrix.name }}.tar.xz"
+            AppDir "dist/installer/Plumbline-${{ steps.v.outputs.file }}-${{ matrix.name }}.AppImage"
+          tar -C dist -cf - Plumbline | xz -6 -T0 > "dist/installer/Plumbline-${{ steps.v.outputs.file }}-${{ matrix.name }}.tar.xz"
       - name: Start the AppImage
         if: runner.os == 'Linux'
         run: |
@@ -127,7 +128,7 @@ jobs:
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: plumbline-${{ matrix.name }}
+          name: Plumbline-${{ steps.v.outputs.file }}-${{ matrix.name }}
           path: dist/installer/*
           retention-days: 14
           compression-level: 0

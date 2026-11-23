@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .. import __version__
+from .. import VERSION_NAME
 from .calibrate import CalibrationResult
 from .detect import Detection
 from .findings import error_outside_fit, model_sentence
@@ -74,7 +74,7 @@ def write_xlsx(
                 rows.append((f"{name}, one standard deviation", sd, "0.0000" if name in ("fx", "fy", "cx", "cy")
                              else "0.000000000"))
     rows += [
-        ("Software", f"Plumbline {__version__} by Calib.Tools, OpenCV {r.opencv_version}", None),
+        ("Software", f"Plumbline {VERSION_NAME} by Calib.Tools, OpenCV {r.opencv_version}", None),
         ("Website", "https://calib.tools", None),
     ]
     ws.append(["Calibration summary", None])
@@ -158,5 +158,5 @@ def write_xlsx(
         wp.auto_filter.ref = f"A1:J{wp.max_row}"
 
     wb.properties.title = f"{project_name} calibration, revision {revision}"
-    wb.properties.creator = f"Plumbline {__version__} by Calib.Tools"
+    wb.properties.creator = f"Plumbline {VERSION_NAME} by Calib.Tools"
     wb.save(str(path))
