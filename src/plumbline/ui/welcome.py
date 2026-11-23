@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..core.project import is_due
 from . import theme as T
-from .widgets import LinkLabel, SvgMark, button, frame, label, open_site, rule
+from .widgets import ClickLabel, LinkLabel, SvgMark, button, frame, label, open_site, rule
 
 def question_mailto() -> str:
     """Mail to Calib.Tools with the facts support needs already filled in. No personal data is added."""
@@ -324,4 +324,15 @@ class WelcomePage(QWidget):
         link = LinkLabel("calib.tools", T.site_url(where="footer"))
         link.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 12px; color: {T.RED_TEXT};')
         h.addWidget(link)
+        h.addWidget(label("·", font=T.mono(12), color=T.INK_MUTED))
+        self.about_link = ClickLabel("About")
+        self.about_link.setStyleSheet(f'font-family: "{T.MONO}"; font-size: 12px; color: {T.RED_TEXT};')
+        self.about_link.setToolTip("Version details and where to report a problem")
+        self.about_link.clicked.connect(self.show_about)
+        h.addWidget(self.about_link)
         return w
+
+    def show_about(self) -> None:
+        from .about import AboutDialog
+
+        AboutDialog(self.window()).exec()
