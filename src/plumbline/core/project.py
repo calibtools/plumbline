@@ -76,6 +76,15 @@ class Project:
     # Two cameras: pairs of images kept out of the calibration, to check its result with. Two lists, one per camera.
     check_detections: list[list[Detection]] = field(default_factory=list)
 
+    # One camera: boards of the same kind in every image, numbered on from the first (see core.boards).
+    board_count: int = 1
+    board_detections: list[list[Detection]] = field(default_factory=list)   # boards 2, 3, ...: one list per board
+
+    def per_board(self) -> list[list[Detection]]:
+        """Every board's detections, board 1 first; boards not yet looked for are left out."""
+        full = [d for d in self.board_detections[:self.board_count - 1] if len(d) == len(self.detections)]
+        return [self.detections] + (full if len(full) == self.board_count - 1 else [])
+
     def drop_check(self) -> None:
         self.check_detections = []
 
@@ -168,6 +177,9 @@ class Project:
             **({"more_cameras": [c.to_dict() for c in self.more_cameras]} if self.second_camera and self.more_cameras else {}),
             **({"check_detections": [[d.to_dict() for d in one] for one in self.check_detections]}
                if self.check_detections else {}),
+            **({"board_count": self.board_count,
+                "board_detections": [[d.to_dict() for d in one] for one in self.board_detections]}
+               if self.board_count > 1 else {}),
         }
 
     def save(self, path: str | None = None) -> None:
@@ -202,4 +214,6 @@ class Project:
                             if (data.get("second_camera") or {}).get("options") else None),
             more_cameras=[ExtraCamera.from_dict(c) for c in data.get("more_cameras", [])] if "second_camera" in data else [],
             check_detections=[[Detection.from_dict(d) for d in one] for one in data.get("check_detections", [])],
+            board_count=int(data.get("board_count", 1)),
+            board_detections=[[Detection.from_dict(d) for d in one] for one in data.get("board_detections", [])],
         )

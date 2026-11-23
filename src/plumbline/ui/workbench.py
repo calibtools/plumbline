@@ -1,6 +1,8 @@
 """Main working window: target, images, detection, calibration, export."""
 from __future__ import annotations
 
+import json
+
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -26,6 +28,7 @@ from ..core.export_code import write_example, write_maps, write_rig_example
 from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, group_findings, rig_findings
+from ..core.boards import MOST_BOARDS, NUMBERED, board_places, board_targets, excluded_views, image_fit, together
 from ..core.check import CheckResult, check_pairs, check_sets
 from ..core.group import GroupResult, calibrate_group
 from ..core.pairing import MOST_CAMERAS, natural, split_by_camera
@@ -456,6 +459,13 @@ class Workbench(QWidget):
         self.first_id.setRange(0, 9999)
         self.first_id.setToolTip("Boards in a set often continue the numbering: board 2 starts where board 1 ends.")
         self.first_id_label = label("First marker ID")
+        self.boards = QSpinBox()
+        self.boards.setRange(1, MOST_BOARDS)
+        self.boards.setToolTip(
+            "Boards of the same kind that are in every image together, for example two boards set at an angle. "
+            "Board 2 carries the marker numbers that follow board 1's. Each board in each image counts as a view "
+            "of its own; they need not be fixed to each other.")
+        self.boards_label = label("Boards per image")
         self.dictionary = QComboBox()
         self.dictionary.addItems(DICTIONARIES)
         self.dictionary.setCurrentText("DICT_5X5_250")
@@ -463,9 +473,9 @@ class Workbench(QWidget):
         self.legacy.setToolTip("Tick this for ChArUco boards laid out the way OpenCV did before version 4.6.")
         self.marker_label = label("Marker size")
         self.dict_label = label("Dictionary")
-        for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.first_id):
+        for wdg in (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.first_id, self.boards):
             wdg.setFixedHeight(36)
-        for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
+        for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id, self.boards):
             wdg.lineEdit().setTextMargins(7, 0, 0, 0)  # line the text up with the combo boxes
         form.addRow(label("Pattern"), self.kind)
         self.sx_label, self.sy_label, self.square_label = label(""), label(""), label("")
@@ -475,6 +485,7 @@ class Workbench(QWidget):
         form.addRow(self.marker_label, self.marker)
         form.addRow(self.dict_label, self.dictionary)
         form.addRow(self.first_id_label, self.first_id)
+        form.addRow(self.boards_label, self.boards)
         v.addLayout(form)
         v.addWidget(self.legacy)
         self.target_hint = label("", "small", wrap=True)
@@ -485,7 +496,7 @@ class Workbench(QWidget):
         v.addWidget(self.target_note)
         for wdg in (self.kind, self.dictionary):
             wdg.currentIndexChanged.connect(self._target_changed)
-        for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id):
+        for wdg in (self.sx, self.sy, self.square, self.marker, self.first_id, self.boards):
             wdg.valueChanged.connect(self._target_changed)
         self.legacy.toggled.connect(self._target_changed)
         return w
@@ -646,6 +657,23 @@ class Workbench(QWidget):
             self._add_cam_tab(i)
         rv.addLayout(self.tabs_row)
         v.addWidget(self.rig_box)
+        # One camera, several boards: how the other boards sit to board 1, from the images that show both.
+        self.boards_part = QWidget()
+        bv = QVBoxLayout(self.boards_part)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(6)
+        bv.addWidget(label("BOARDS, SEEN FROM BOARD 1", "eyebrow"))
+        self.boards_box = frame("sheet")
+        self.boards_grid = QGridLayout(self.boards_box)
+        self.boards_grid.setContentsMargins(12, 6, 12, 6)
+        self.boards_grid.setHorizontalSpacing(12)
+        self.boards_grid.setVerticalSpacing(2)
+        self.boards_grid.setColumnStretch(1, 1)
+        bv.addWidget(self.boards_box)
+        self.boards_note = label("", "small", wrap=True)
+        bv.addWidget(self.boards_note)
+        bv.addSpacing(8)
+        v.addWidget(self.boards_part)
         v.addWidget(label("INTRINSICS, PX", "eyebrow"))
         self.intr = self._kv_grid(("fx", "fy", "cx", "cy"))
         v.addWidget(self.intr[0])
@@ -718,7 +746,8 @@ class Workbench(QWidget):
         self._target_changed()
 
     def _fill_fields(self, t: Target) -> None:
-        fields = (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id)
+        fields = (self.kind, self.sx, self.sy, self.square, self.marker, self.dictionary, self.legacy, self.first_id,
+                  self.boards)
         for wdg in fields:
             wdg.blockSignals(True)
         self.kind.setCurrentIndex(max(0, self.kind.findData(t.kind)))
@@ -732,6 +761,7 @@ class Workbench(QWidget):
             self.dictionary.setCurrentText(t.dictionary)
             self.legacy.setChecked(t.legacy_pattern)
             self.first_id.setValue(t.first_marker_id)
+        self.boards.setValue(self.project.board_count if t.kind in NUMBERED else 1)
         self._last_kind = t.kind
         for wdg in fields:
             wdg.blockSignals(False)
@@ -827,6 +857,9 @@ class Workbench(QWidget):
         self.target_note.setText(note)
         for wdg in (self.dictionary, self.dict_label, self.first_id, self.first_id_label):
             wdg.setVisible(tags)
+        for wdg in (self.boards, self.boards_label):
+            wdg.setVisible(tags)
+        self.boards.setEnabled(not self.project.second_camera)
         for wdg in (self.marker, self.marker_label):
             wdg.setVisible(tags or circles)
         self.legacy.setVisible(charuco)
@@ -865,8 +898,22 @@ class Workbench(QWidget):
                        f"{target.first_marker_id + target.marker_count - 1}." if target.kind == CHARUCO else ".")
                 )
             self.table.setHorizontalHeaderLabels(["File", target.point_word.capitalize(), "Error, px"])
-        if target != self.project.target:
+        count = self.boards.value() if target is not None and target.kind in NUMBERED and not self.project.second_camera else 1
+        if target is not None and count > 1:
+            try:
+                last = board_targets(target, count)[-1]
+                one = "tag" if target.kind == APRILGRID else "marker"
+                self.target_hint.setText(
+                    self.target_hint.text() + f" {count} boards per image: the last one carries {one} IDs "
+                    f"{last.first_marker_id} to {last.first_marker_id + last.marker_count - 1}.")
+            except ValueError as e:
+                self.target_hint.setStyleSheet(f"color: {T.RED_TEXT};")
+                self.target_hint.setText(f"{count} boards per image: {e}")
+                target = None
+        if target is not None and (target != self.project.target or count != self.project.board_count):
             self.project.target = target
+            self.project.board_count = count
+            self.project.board_detections = []
             had = any(d.count for d in self.project.detections)
             self.project.detections = []
             self.project.drop_check()      # found with the old target settings
@@ -982,6 +1029,10 @@ class Workbench(QWidget):
         if p.camera_count >= MOST_CAMERAS:
             self._say(f"A project holds up to {MOST_CAMERAS} cameras.")
             return
+        if self._boards() > 1:
+            self._say("Several boards per image work with one camera for now. Set Boards per image to 1 on the "
+                      "Target tab to add a camera.")
+            return
         self._cam = self._other = p.add_camera()
         p.drop_check()
         self.result = None
@@ -1072,6 +1123,20 @@ class Workbench(QWidget):
         if self.project.target is not None:
             self.run_detection()
 
+    def _boards(self) -> int:
+        """Boards looked for in every image: more than one only with one camera and numbered markers."""
+        p = self.project
+        return p.board_count if (not p.second_camera and p.target is not None and p.target.kind in NUMBERED) else 1
+
+    def _per_board(self) -> list[list[Detection]]:
+        per = self.project.per_board()
+        return per if len(per) == self._boards() else [self.project.detections]
+
+    def _flat(self) -> list[Detection]:
+        """One camera's detections as `calibrate` and the exports take them: every board in every image a view."""
+        per = self._per_board()
+        return together(per) if len(per) > 1 else self.project.detections
+
     def _sync_own_model(self) -> None:
         """Cameras added by the file names take camera 1's lens settings unless every camera has its own."""
         p = self.project
@@ -1093,12 +1158,18 @@ class Workbench(QWidget):
             return
         lists = [list(self.project.paths_of(cam)) for cam in range(self.project.camera_count)]
         every = [q for one in lists for q in one]
+        boards = self._boards()
+        more = board_targets(target, boards)[1:] if boards > 1 else []
 
         def job(progress):
             out = []
             for i, p in enumerate(every):
                 out.append(detect_file(p, target))
-                progress(i + 1, len(every))
+                progress(i + 1, len(every) * boards)
+            for b, other in enumerate(more, 1):        # the further boards, in the same images
+                for i, p in enumerate(every):
+                    out.append(detect_file(p, other))
+                    progress(b * len(every) + i + 1, len(every) * boards)
             return out
 
         def done(dets):
@@ -1106,6 +1177,7 @@ class Workbench(QWidget):
             for cam, one in enumerate(lists):
                 self.project.set_detections(cam, dets[at:at + len(one)])
                 at += len(one)
+            self.project.board_detections = [dets[b * len(every):(b + 1) * len(every)] for b in range(1, boards)]
             self.project.excluded = set()
             self.result = None
             good = sum(d.usable for d in dets)
@@ -1176,14 +1248,25 @@ class Workbench(QWidget):
                         "Calibrating")
             return
 
+        boards = len(self._per_board())
+        images = len(dets)
+
         def done(result: CalibrationResult):
             self.result = result
             self.project.last_rms_point = result.rms_point
             self.tabs.setCurrentIndex(2)
-            self._say(f"Calibrated from {len(result.views)} images, RMS {result.rms_point:.3f} px." + self._left_out)
+            used = len({v.index % images for v in result.views})
+            also = f" ({len(result.views)} views of {boards} boards)" if boards > 1 else ""
+            self._say(f"Calibrated from {used} images{also}, RMS {result.rms_point:.3f} px." + self._left_out)
             self._left_out = ""
             self._refresh()
 
+        if boards > 1:
+            # Each board has a position of its own in every image; one shape for all of them makes no sense.
+            options = replace(options, release_board=False)
+            flat, left_out = self._flat(), excluded_views(excluded, images, boards)
+            self._start(lambda _p: calibrate(flat, target, options, left_out), done, "Calibrating")
+            return
         self._start(lambda _p: calibrate(dets, target, options, excluded), done, "Calibrating")
 
     def export_all(self):
@@ -1259,8 +1342,21 @@ class Workbench(QWidget):
                                    self.check)
                 written.append(both["rig_report"])
         else:
-            written += self._write_camera(self.result, self.project.detections, base, export_files(name, revision),
+            written += self._write_camera(self.result, self._flat(), base, export_files(name, revision),
                                           formats, name, revision, safe_name(name))
+            per = self._per_board()
+            if len(per) > 1 and "json" in formats:
+                # Several boards per image: how the other boards sit to board 1 goes into the same file.
+                target_file = base / export_files(name, revision)["json"]
+                data = json.loads(target_file.read_text(encoding="utf-8"))
+                data["boards"] = {
+                    "per_image": len(per),
+                    "note": "Each board in each image is a view of its own; views of boards after the first carry "
+                            "the board in their name. Places are from the images that show both boards; the "
+                            "spread is how much those images disagree.",
+                    "seen_from_board_1": [q.to_dict() for q in board_places(self.result, len(per[0]), len(per))],
+                }
+                target_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         project_file = export_files(name, revision)["project"]
         written.append(project_file)
         self.project.revision, self.project.export_signature = revision, signature
@@ -1450,13 +1546,34 @@ class Workbench(QWidget):
         if 0 <= index < self.table.rowCount():
             self.table.selectRow(index)
 
+    def _image_det(self, index: int) -> Detection | None:
+        """One camera, several boards: the image's detection with every board's points, usable boards only."""
+        per = self._per_board()
+        if len(per) < 2:
+            dets = self.project.detections
+            return dets[index] if 0 <= index < len(dets) else None
+        mine = [dets[index] for dets in per if 0 <= index < len(dets)]
+        if not mine:
+            return None
+        good = [d for d in mine if d.usable] or mine[:1]
+        return Detection(mine[0].path, mine[0].width, mine[0].height,
+                         np.concatenate([np.asarray(d.ids) + b * 100000 for b, d in enumerate(good)]),
+                         np.concatenate([np.asarray(d.corners).reshape(-1, 2) for d in good]),
+                         " · ".join(dict.fromkeys(d.note for d in mine if d.note)))
+
     def _view_for(self, index: int):
         if self.result is None:
             return None
+        per = self._per_board()
+        if len(per) > 1:
+            return image_fit(self.result, per, index)      # every board of this image together
         return next((v for v in self.result.views if v.index == index), None)
 
     def _row_usable(self, index: int) -> bool:
         """A row can be excluded or restored if at least one of its images shows the target."""
+        if self._boards() > 1:
+            det = self._image_det(index)
+            return det is not None and det.usable
         for cam in range(self.project.camera_count):
             dets = self.project.detections_of(cam)
             if 0 <= index < len(dets) and dets[index].usable:
@@ -1503,6 +1620,8 @@ class Workbench(QWidget):
             return
         det = dets[row] if row < len(dets) else None
         fit = next((v for v in r.views if v.index == row), None) if r is not None else None
+        if not two and self._boards() > 1:
+            det, fit = self._image_det(row), self._view_for(row)
         name = Path(paths[row]).name
         word = self.project.target.point_word if self.project.target else "corners"
         if two:
@@ -1529,6 +1648,8 @@ class Workbench(QWidget):
         else:
             caption = f"{name} · {det.width} × {det.height} · {det.count} {word}"
         corners = det.corners if det is not None else np.zeros((0, 2))
+        if fit is not None and hasattr(fit, "corners"):
+            corners = fit.corners          # several boards: the points in the order of what they are off by
         gray = read_gray(paths[row])
         residuals = fit.residuals if fit else None
         if view is self.view:
@@ -1575,11 +1696,22 @@ class Workbench(QWidget):
         self.chart.set_data(bars, self._current)
 
     def _excluded_error(self, index: int) -> float | None:
+        per = self._per_board()
+        if len(per) > 1:
+            # Every board of the image, weighted by its points.
+            parts = [(error_outside_fit(self.result, dets[index]), dets[index].count) for dets in per]
+            parts = [(e, k) for e, k in parts if e is not None]
+            if not parts:
+                return None
+            return float(np.sqrt(sum(e * e * k for e, k in parts) / sum(k for _e, k in parts)))
         return error_outside_fit(self.result, self.project.detections[index])
 
     def _refresh(self):
         p, r = self.project, self.result
         dets = p.detections
+        boards = len(self._per_board())
+        if boards > 1:
+            dets = [self._image_det(i) for i in range(len(p.detections))]      # per image, every board together
         n = len(p.image_paths)
         shown = p.name if len(p.name) <= 20 else p.name[:19] + "\u2026"
         full = shown + (f" \u00b7 r{p.revision}" if p.revision else "")
@@ -1603,6 +1735,8 @@ class Workbench(QWidget):
             view = self._view_for(i)
             excluded = i in p.excluded
             corners = "" if det is None else str(det.count)
+            if det is not None and boards > 1:       # each board's points, board 1 first
+                corners = "+".join(str(one[i].count) for one in self._per_board())
             if excluded:
                 err = "out"
             elif view is not None:
@@ -1632,7 +1766,7 @@ class Workbench(QWidget):
             self.images_count.setText(f"{n} loaded" if n else "")
 
         # Coverage from the images that take part, of the camera on show.
-        shown = p.detections_of(self._cam if two else 0)
+        shown = p.detections_of(self._cam if two else 0) if (two or boards < 2) else dets
         active = [d for i, d in enumerate(shown) if d.usable and i not in p.excluded]
         if active:
             grid, share = coverage_grid(active, active[0].width, active[0].height)
@@ -1667,6 +1801,10 @@ class Workbench(QWidget):
             step.set_state(kind, status)
         self._fill_rig()
         self._fill_check()
+        self._fill_boards()
+        self.opt_board.setEnabled(self._boards() < 2)
+        self.opt_board.setToolTip("" if self._boards() < 2 else "Not with several boards per image: each board has "
+                                  "a position of its own, so one shape for all of them cannot be estimated.")
 
         # Result tab.
         if r is None:
@@ -1684,10 +1822,17 @@ class Workbench(QWidget):
             f"Per point, as OpenCV reports it. Counted per coordinate (as mrcal does) "
             f"the same result reads {r.rms_coordinate:.3f} px."
         )
-        self.used_note.setText(
-            f"{len(r.views)} of {n} images, {r.corner_total:,} {r.target.point_word} · "
-            f"{len(r.excluded)} excluded · {len(r.skipped)} without a usable detection"
-        )
+        if boards > 1 and not two:
+            images = len(p.detections)
+            used = len({v.index % images for v in r.views})
+            self.used_note.setText(
+                f"{used} of {n} images, {len(r.views)} views of {boards} boards, {r.corner_total:,} "
+                f"{r.target.point_word} · {len(p.excluded)} excluded")
+        else:
+            self.used_note.setText(
+                f"{len(r.views)} of {n} images, {r.corner_total:,} {r.target.point_word} · "
+                f"{len(r.excluded)} excluded · {len(r.skipped)} without a usable detection"
+            )
         for k, val in zip(("fx", "fy", "cx", "cy"), (r.fx, r.fy, r.cx, r.cy)):
             self.intr[1][k].setText(f"{val:.2f}")
         u = r.uncertainty
@@ -1838,6 +1983,37 @@ class Workbench(QWidget):
                     item.setForeground(Qt.GlobalColor.darkRed)
                 self.table.setItem(i, c, item)
         self.table.blockSignals(False)
+
+    def _fill_boards(self) -> None:
+        """One camera, several boards: a line per further board with its angle and distance from board 1."""
+        per, r = self._per_board(), self.result
+        on = len(per) > 1 and not self.project.second_camera
+        self.boards_part.setVisible(on)
+        if not on:
+            return
+        g = self.boards_grid
+        self._clear(g)
+        for c, head in enumerate(("", "Angle, °", "Apart, mm")):
+            g.addWidget(label(head, "small"), 0, c, Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
+        places = board_places(r, len(per[0]), len(per)) if r is not None else []
+        moving = False
+        for b in range(1, len(per)):
+            place = places[b - 1] if places and places[b - 1].images else None
+            cells = (f"Board {b + 1}",
+                     f"{place.angle_deg:.2f} ± {place.angle_spread_deg:.2f}" if place and place.images > 1 else
+                     f"{place.angle_deg:.2f}" if place else "–",
+                     f"{place.apart_mm:.1f} ± {place.place_spread_mm:.1f}" if place and place.images > 1 else
+                     f"{place.apart_mm:.1f}" if place else "–")
+            for c, text in enumerate(cells):
+                g.addWidget(label(text, font=T.mono(13, 600 if c else 400), color=T.INK if c else T.INK_MUTED), b, c,
+                            Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
+            moving = moving or bool(place and place.images > 1 and (place.place_spread_mm > 2 or place.angle_spread_deg > 0.5))
+        note = ("From the images that show both boards. ± is how much the images disagree. Each board in each image "
+                "is a view of its own; the result does not rely on the boards being fixed to each other.")
+        if moving:
+            note = ("The images disagree about how the boards sit to each other: they moved between images, or a "
+                    "pose is poor. The camera result does not rely on them being fixed. " + note.split(". ", 2)[1] + ".")
+        self.boards_note.setText(note if r is not None else "How the other boards sit to board 1 shows here after calibration.")
 
     def _fill_rig(self) -> None:
         rig = self.rig
