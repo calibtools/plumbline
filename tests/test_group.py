@@ -133,7 +133,7 @@ def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
     QSettings().clear()
     rng = np.random.default_rng(7)
     files = []
-    for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 6, 7)):
+    for i, (r, t) in enumerate(synth.sample_poses(charuco, camera, 8, 7)):
         R1 = cv2.Rodrigues(np.asarray(r, np.float64))[0]
         for c, (R, T) in enumerate(PLACES):
             files.append(str(tmp_path / f"cam{c + 1}-{i:02d}.png"))
@@ -155,6 +155,7 @@ def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
     bench._target_changed()
 
     # All images handed over together: three cameras in the file names.
+    files, held = files[:18], files[18:]       # two sets are kept out, to check the result with
     bench.add_images(sorted(files, key=lambda p: p[::-1]))
     assert bench.project.camera_count == 3 and [len(bench.project.paths_of(c)) for c in range(3)] == [6, 6, 6]
     settle(bench)
@@ -177,10 +178,22 @@ def test_three_cameras_in_the_window(tmp_path, monkeypatch, charuco, camera):
     bench._select_camera(0)
     assert bench.rig_head.text() == "CAMERA 3, SEEN FROM CAMERA 1" and bench.result is g.cameras[0]
 
+    # The result checked with the two sets that took no part; the check follows a new calibration.
+    assert not bench.check_part.isHidden() and bench.check_box.isHidden()
+    bench.check_with(held[:2])          # two of the three cameras only
+    assert bench.check is None and "apart by 1 / 2 / 3" in bench.status.text()
+    bench.check_with(held)
+    settle(bench)
+    c = bench.check
+    assert c is not None and 1 <= len(c.pairs) <= 2 and abs(c.scale - 1) < 0.005
+    assert bench.check_pairs_name.text() == "Sets" and bench.status.text().startswith("Checked with")
+    assert len(bench.project.check_detections) == 3
+
     # A set left out, and each camera with its own lens settings.
     bench._toggle(1)
     settle(bench)
     assert bench.group.unused == [1] and bench.table.item(1, 4).text() == "out"
+    assert bench.check is not None and bench.check is not c
     bench._toggle(1)
     bench.own_model.setChecked(True)
     assert bench.project.options_of(2) is not bench.project.options and bench.result is None

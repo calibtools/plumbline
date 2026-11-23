@@ -26,7 +26,7 @@ from ..core.export_code import write_example, write_maps, write_rig_example
 from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, group_findings, rig_findings
-from ..core.check import CheckResult, check_pairs
+from ..core.check import CheckResult, check_pairs, check_sets
 from ..core.group import GroupResult, calibrate_group
 from ..core.pairing import MOST_CAMERAS, natural, split_by_camera
 from ..core.project import SUFFIX, Project
@@ -617,7 +617,8 @@ class Workbench(QWidget):
         cg.setVerticalSpacing(2)
         self.check_values = {}
         for i, k in enumerate(("Lengths come out", "Length error, RMS", "Largest error", "Out of flat, RMS", "Pairs")):
-            cg.addWidget(label(k, font=T.mono(13), color=T.INK_MUTED), i, 0)
+            self.check_pairs_name = label(k, font=T.mono(13), color=T.INK_MUTED)     # the last one: pairs or sets
+            cg.addWidget(self.check_pairs_name, i, 0)
             val = label("–", font=T.mono(13, 600))
             cg.addWidget(val, i, 1, Qt.AlignmentFlag.AlignRight)
             self.check_values[k] = val
@@ -628,7 +629,7 @@ class Workbench(QWidget):
         self.check_link = QPushButton("Check with other images")
         self.check_link.setCursor(Qt.CursorShape.PointingHandCursor)
         self.check_link.setToolTip(
-            "Pick pairs of images of the same target that were not used for this calibration. The two cameras "
+            "Pick images of the same target, one per camera and moment, that were not used for this calibration. The cameras "
             "measure lengths on the board, and these are compared with the board's own dimensions.")
         self.check_link.setStyleSheet(
             f'border: 0; background: transparent; padding: 0; min-height: 0; text-align: left; color: {T.INK_MUTED}; '
@@ -1138,6 +1139,7 @@ class Workbench(QWidget):
 
             def done_group(group: GroupResult):
                 self.group = group
+                self.check = self._check_again(group)
                 self._result = group.cameras[self._cam]
                 self.project.last_rms_point = group.rms_point
                 self.tabs.setCurrentIndex(2)
@@ -1325,30 +1327,36 @@ class Workbench(QWidget):
         return self._worker is not None and self._worker.isRunning()
 
     def check_with(self, paths: list[str] | None = None) -> None:
-        """Check the two-camera result with pairs of images that took no part in it."""
-        rig, target = self.rig, self.project.target
+        """Check the result of two or more cameras with images that took no part in it."""
+        count = self.project.camera_count
+        rig, target = (self.rig if count == 2 else self.group if count >= 3 else None), self.project.target
         if rig is None or target is None or self._busy():
             return
         if not paths:
             paths, _ = QFileDialog.getOpenFileNames(self, "Images that were not used for the calibration", "", IMAGE_FILTER)
         if not paths:
             return
-        known = set(self.project.image_paths) | set(self.project.second_image_paths)
+        mine_all = [q for cam in range(count) for q in self.project.paths_of(cam)]
+        known = set(mine_all)
         fresh = [q for q in paths if q not in known]
         if len(fresh) < len(paths) and not fresh:
             self._say("These images are part of the calibration. A check needs images that took no part in it.")
             return
-        split = split_by_camera(fresh, least=1)
-        if split is None or len(split.cameras) != 2:
-            self._say("The file names do not show which image is from which camera. Name them as the images of the "
-                      "calibration are named, for example cam1-01.png and cam2-01.png.")
-            return
-        mine = split_by_camera(list(self.project.image_paths) + list(self.project.second_image_paths))
-        if mine is not None and mine.first == self.project.image_paths and mine.labels != split.labels:
-            self._say(f"The images of the calibration tell the cameras apart by {mine.labels[0]} / {mine.labels[1]}; "
-                      f"these do it by {split.labels[0]} / {split.labels[1]}. Name them the same way.")
-            return
-        every = split.first + split.second
+        # The cameras are told apart the way the images of the calibration tell them apart, where those do.
+        mine = split_by_camera(mine_all)
+        if mine is not None and mine.first == self.project.image_paths:
+            split = split_by_camera(fresh, least=1, labels=mine.labels)
+            if split is None:
+                self._say(f"The images of the calibration tell the cameras apart by {' / '.join(mine.labels)} in "
+                          "their names. Name these the same way, one image per camera for every moment.")
+                return
+        else:
+            split = split_by_camera(fresh, least=1, cameras=count)
+            if split is None:
+                self._say(f"The file names do not show which image is from which of the {count} cameras. Name them, "
+                          "for example, cam1-01.png and cam2-01.png.")
+                return
+        every = [q for one in split.cameras for q in one]
         dropped = len(paths) - len(fresh)
 
         def job(progress):
@@ -1356,18 +1364,18 @@ class Workbench(QWidget):
             for i, q in enumerate(every):
                 dets.append(detect_file(q, target))
                 progress(i + 1, len(every))
-            half = len(split.first)
-            return dets[:half], dets[half:]
+            each = len(split.first)
+            return [dets[cam * each:(cam + 1) * each] for cam in range(count)]
 
         def done(found):
             try:
-                result = check_pairs(rig, found[0], found[1], target)
+                result = check_pairs(rig, found[0], found[1], target) if count == 2 else check_sets(rig, found, target)
             except ValueError as e:
                 self._say(str(e))
                 return
-            self.project.check_detections = [list(found[0]), list(found[1])]     # kept with the project
+            self.project.check_detections = [list(one) for one in found]     # kept with the project
             self.check = result
-            said = (f"Checked with {len(result.pairs)} pairs: lengths come out {(result.scale - 1) * 100:+.3f} %, "
+            said = (f"Checked with {len(result.pairs)} {'pairs' if count == 2 else 'sets'}: lengths come out {(result.scale - 1) * 100:+.3f} %, "
                     f"error {result.length_error_rms_mm:.2f} mm RMS.")
             if dropped:
                 said += f" {dropped} image{'' if dropped == 1 else 's'} of the calibration left out."
@@ -1381,18 +1389,22 @@ class Workbench(QWidget):
         self._start(job, done, "Checking", failed)
 
     def _check_again(self, rig) -> CheckResult | None:
-        """The check with the images kept for it, for a new result of the same two cameras."""
+        """The check with the images kept for it, for a new result of the same cameras."""
         kept = self.project.check_detections
-        if len(kept) != 2 or self.project.target is None:
+        if len(kept) != self.project.camera_count or len(kept) < 2 or self.project.target is None:
             return None
         try:
-            return check_pairs(rig, kept[0], kept[1], self.project.target)
+            if len(kept) == 2:
+                return check_pairs(rig, kept[0], kept[1], self.project.target)
+            return check_sets(rig, kept, self.project.target)
         except ValueError:
             return None
 
     def _fill_check(self) -> None:
-        two = self.project.camera_count == 2
-        self.check_part.setVisible(two and self.rig is not None)
+        count = self.project.camera_count
+        two = count == 2
+        self.check_part.setVisible((two and self.rig is not None) or (count >= 3 and self.group is not None))
+        self.check_pairs_name.setText("Pairs" if two else "Sets")
         c = self.check
         self.check_box.setVisible(c is not None)
         self.check_note.setVisible(c is not None)
@@ -1407,7 +1419,7 @@ class Workbench(QWidget):
             val.setText(text)
         self.check_note.setText(
             f"From images that took no part in the calibration: {c.spans:,} lengths of up to {c.longest_mm:.0f} mm "
-            "between points of the board, as the two cameras measure them, against the board itself. "
+            f"between points of the board, as the {'two ' if two else ''}cameras measure them, against the board itself. "
             "+ means measured too long.")
 
     def _start(self, job, done, what: str, failed=None):

@@ -58,3 +58,13 @@ def test_three_and_more_cameras():
     folders = [[f"/data/{name}/img_{i:02d}.png" for i in range(6)] for name in ("a", "b", "c", "d")]
     split = split_by_camera(sum(folders, []))
     assert split.cameras == folders and split.labels == ("a", "b", "c", "d")
+
+
+def test_a_few_images_of_cameras_already_known():
+    """Two sets of three cameras read two ways; the cameras' own labels, or their number, settle it."""
+    few = [f"/data/cam{c}-{i:02d}.png" for i in (17, 18) for c in (1, 2, 3)]
+    assert len(split_by_camera(few, least=1).cameras) == 2                    # more sets than cameras is the guess
+    split = split_by_camera(few, least=1, labels=("1", "2", "3"))
+    assert [len(c) for c in split.cameras] == [2, 2, 2] and split.cameras[2] == ["/data/cam3-17.png", "/data/cam3-18.png"]
+    assert split_by_camera(few, least=1, cameras=3).cameras == split.cameras
+    assert split_by_camera(few, least=1, labels=("left", "mid", "right")) is None

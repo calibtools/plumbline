@@ -45,8 +45,13 @@ def natural(pieces) -> list:
     return [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in pieces]
 
 
-def split_by_camera(paths: list[str], least: int = 3) -> Split | None:
-    """Split a set of image paths into two or more cameras, or None if the names do not say so clearly."""
+def split_by_camera(paths: list[str], least: int = 3, labels: tuple[str, ...] | None = None,
+                    cameras: int | None = None) -> Split | None:
+    """Split a set of image paths into two or more cameras, or None if the names do not say so clearly.
+
+    With `labels`, only a split by exactly these values counts (the way an earlier set of the same
+    cameras was told apart); with `cameras`, only a split into that many.
+    """
     if len(paths) < 2 * least:
         return None
     parts = {p: _parts(p) for p in paths}
@@ -57,6 +62,8 @@ def split_by_camera(paths: list[str], least: int = 3) -> Split | None:
     for at in range(lengths.pop()):
         values = sorted({v[at] for v in parts.values()})
         if not 2 <= len(values) <= MOST_CAMERAS:
+            continue
+        if (labels is not None and tuple(values) != tuple(labels)) or (cameras is not None and len(values) != cameras):
             continue
         groups: dict[tuple, dict[str, str]] = {}
         clash = False
