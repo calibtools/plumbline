@@ -250,3 +250,25 @@ def test_fisheye_lens_from_images_to_export(tmp_path, charuco, fisheye_set):
     app.processEvents()
     assert win.bench.result is None and not win.bench.view.corrected
     QSettings().setValue("project_counter", 0)
+
+
+def test_the_two_camera_sample():
+    """From the welcome page: both cameras' images are rendered, told apart by their names and calibrated together."""
+    from PySide6.QtCore import QSettings, QStandardPaths
+
+    from plumbline.app import SAMPLE_PAIRS, SAMPLE_PAIR_SHIFT, MainWindow, create_app
+
+    QStandardPaths.setTestModeEnabled(True)
+    app = create_app([])
+    QSettings().clear()
+    win = MainWindow()
+    win.show()
+    win.welcome.try_sample_pair.emit()
+    _wait(app, win)
+    bench = win.bench
+    assert win.stack.currentWidget() is bench and bench.project.title == "Sample-two-cameras"
+    rig = bench.rig
+    assert rig is not None and len(rig.pairs) == SAMPLE_PAIRS and not rig.unpaired
+    assert rig.translation == pytest.approx(SAMPLE_PAIR_SHIFT, abs=0.5) and rig.turned_deg == pytest.approx(4.0, abs=0.05)
+    assert "spoiled" not in bench.status.text()
+    QSettings().setValue("project_counter", 0)

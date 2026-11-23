@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget,
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
@@ -104,6 +104,7 @@ class WelcomePage(QWidget):
     open_project = Signal()
     open_recent = Signal(str)
     try_sample = Signal()
+    try_sample_pair = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -153,6 +154,14 @@ class WelcomePage(QWidget):
             v.addWidget(b)
             v.addSpacing(10)
         v.addWidget(label("24 rendered images of a ChArUco board. No camera or board needed.", "small"))
+        v.addSpacing(6)
+        b_pair = QPushButton("Or try a sample with two cameras")
+        b_pair.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_pair.setStyleSheet(
+            f'border: 0; background: transparent; padding: 0; min-height: 0; text-align: left; color: {T.INK_MUTED}; '
+            f'font-family: "{T.MONO}"; font-size: 12px; font-weight: 500; text-decoration: underline;')
+        b_pair.clicked.connect(self.try_sample_pair)
+        v.addWidget(b_pair, 0, Qt.AlignmentFlag.AlignLeft)
         v.addSpacing(24)
 
         v.addWidget(label("IN THIS VERSION", "eyebrow"))
@@ -163,9 +172,9 @@ class WelcomePage(QWidget):
         g.setHorizontalSpacing(12)
         g.setVerticalSpacing(0)
         rows = [
-            ("Cameras", "One at a time"),
-            ("Patterns", "ChArUco, checkerboard"),
-            ("Lens model", "OpenCV standard"),
+            ("Cameras", "One, two, or up to eight"),
+            ("Patterns", "ChArUco, checkerboard, circles, tag grids"),
+            ("Lens model", "OpenCV standard and fisheye"),
             ("Export", "OpenCV YAML and JSON, ROS, PDF report"),
         ]
         for r, (k, val) in enumerate(rows):
@@ -177,7 +186,7 @@ class WelcomePage(QWidget):
         g.setColumnStretch(1, 1)
         v.addWidget(box)
         v.addSpacing(8)
-        v.addWidget(label("Next: more patterns, fisheye lenses, uncertainty, several cameras.", "small", wrap=True))
+        v.addWidget(label("Results come with their uncertainty. Next: signed installers, more lens models, several boards.", "small", wrap=True))
 
         v.addStretch(1)
         v.addWidget(label("Your images stay on this computer. Plumbline sends nothing.", "muted", wrap=True))

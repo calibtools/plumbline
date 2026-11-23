@@ -26,6 +26,9 @@ SAMPLE_COUNT = 24
 # Two of the sample images are spoiled on purpose: the board moved by this much (mm) while the image was read out.
 # They look like the others; their error does not. Leaving them out is what the sample is there to show.
 SAMPLE_SPOILED = {6: 2.0, 17: -2.0}
+SAMPLE_PAIRS = 16
+SAMPLE_PAIR_SHIFT = (-120.0, 2.0, 5.0)      # x2 = R x1 + T, mm: camera 2 sits 120 mm to the right of camera 1
+SAMPLE_PAIR_TURN = (0.0, -0.0698132, 0.0)   # rotation vector, rad: turned 4 degrees towards camera 1
 SAMPLE_HINT = " Two are spoiled on purpose: exclude the two tall bars."
 
 
@@ -46,6 +49,7 @@ class MainWindow(QMainWindow):
         self.welcome.open_project.connect(self.open_project)
         self.welcome.open_recent.connect(self.open_path)
         self.welcome.try_sample.connect(self.try_sample)
+        self.welcome.try_sample_pair.connect(self.try_sample_pair)
         self.bench.go_home.connect(self.show_welcome)
         self.bench.project_saved.connect(self._saved)
         self._worker = None
@@ -87,13 +91,40 @@ class MainWindow(QMainWindow):
             )
 
     def try_sample(self):
-        folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)) / "sample-charuco-2"
-        paths = [folder / f"sample-{i + 1:02d}.png" for i in range(SAMPLE_COUNT)]
+        def images(camera, rng):
+            for i, (r, t) in enumerate(synth.sample_poses(SAMPLE_TARGET, camera, SAMPLE_COUNT)):
+                if i in SAMPLE_SPOILED:
+                    yield synth.render_moving(SAMPLE_TARGET, camera, r, t, SAMPLE_SPOILED[i], rng)
+                else:
+                    yield synth.render(SAMPLE_TARGET, camera, r, t, rng)
+
+        names = [f"sample-{i + 1:02d}.png" for i in range(SAMPLE_COUNT)]
+        self._sample("sample-charuco-2", names, images, lambda paths: self._open_sample(paths, "Sample-ChArUco", SAMPLE_HINT))
+
+    def try_sample_pair(self):
+        """Two cameras side by side looking at the same board: camera 2 is 120 mm to the right and turned 4 degrees in."""
+        def images(camera, rng):
+            import numpy as np
+
+            turn = cv2.Rodrigues(np.array(SAMPLE_PAIR_TURN))[0]
+            for r, t in synth.sample_poses(SAMPLE_TARGET, camera, SAMPLE_PAIRS):
+                first = cv2.Rodrigues(np.asarray(r, np.float64))[0]
+                yield synth.render(SAMPLE_TARGET, camera, r, t, rng)
+                yield synth.render(SAMPLE_TARGET, camera, cv2.Rodrigues(turn @ first)[0].ravel(),
+                                   turn @ np.asarray(t, np.float64).ravel() + np.array(SAMPLE_PAIR_SHIFT), rng)
+
+        names = [f"cam{c}-{i + 1:02d}.png" for i in range(SAMPLE_PAIRS) for c in (1, 2)]
+        self._sample("sample-two-cameras", names, images, lambda paths: self._open_sample(paths, "Sample-two-cameras"))
+
+    def _sample(self, folder_name: str, names: list[str], images, then) -> None:
+        """Render a set of sample images once, keep them in the cache folder, and open them."""
+        folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)) / folder_name
+        paths = [folder / name for name in names]
         if all(p.exists() for p in paths):
-            self._open_sample(paths)
+            then(paths)
             return
         folder.mkdir(parents=True, exist_ok=True)
-        dialog = QProgressDialog("Rendering the sample images …", "", 0, SAMPLE_COUNT, self)
+        dialog = QProgressDialog("Rendering the sample images …", "", 0, len(paths), self)
         dialog.setCancelButton(None)
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
@@ -101,30 +132,25 @@ class MainWindow(QMainWindow):
         def job(progress):
             import numpy as np
 
-            camera = synth.default_camera()
-            rng = np.random.default_rng(1007)
-            for i, (r, t) in enumerate(synth.sample_poses(SAMPLE_TARGET, camera, SAMPLE_COUNT)):
-                if i in SAMPLE_SPOILED:
-                    img = synth.render_moving(SAMPLE_TARGET, camera, r, t, SAMPLE_SPOILED[i], rng)
-                else:
-                    img = synth.render(SAMPLE_TARGET, camera, r, t, rng)
+            for i, img in enumerate(images(synth.default_camera(), np.random.default_rng(1007))):
                 ok, buf = cv2.imencode(".png", img)
                 buf.tofile(str(paths[i]))
-                progress(i + 1, SAMPLE_COUNT)
+                progress(i + 1, len(paths))
             return paths
 
         w = Worker(job, self)
         w.progress.connect(lambda a, _b: dialog.setValue(a))
-        w.finished_ok.connect(lambda p: (dialog.close(), self._open_sample(p)))
+        w.finished_ok.connect(lambda p: (dialog.close(), then(p)))
         w.failed.connect(lambda m: (dialog.close(), QMessageBox.warning(self, "Plumbline", m)))
         self._worker = w
         w.start()
 
-    def _open_sample(self, paths):
-        self.bench.load_project(Project(target=SAMPLE_TARGET, title="Sample-ChArUco"))
+    def _open_sample(self, paths, title: str, hint: str = ""):
+        self.bench.load_project(Project(target=SAMPLE_TARGET, title=title))
         self.stack.setCurrentWidget(self.bench)
         self.bench.add_images([str(p) for p in paths])
-        self.bench._left_out = SAMPLE_HINT       # said once, after the first calibration
+        if hint:
+            self.bench._left_out = hint       # said once, after the first calibration
 
     def _saved(self, path: str, target: str, rms, due=None):
         remember_project(path, target, rms, due)
