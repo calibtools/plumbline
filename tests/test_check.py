@@ -124,10 +124,20 @@ def test_the_check_in_the_window(tmp_path, charuco, camera):
     assert write_rig_report(rig, *two, out / "with.pdf", check=c) == write_rig_report(rig, *two, out / "without.pdf")
     assert (out / "with.pdf").stat().st_size > (out / "without.pdf").stat().st_size
 
-    # The check belongs to the result it was made with: a new calibration clears it.
+    # The check images are kept with the project: a new calibration is checked with them again.
     bench._toggle(0)
     settle(bench)
-    assert bench.rig is not rig and bench.check is None and bench.check_box.isHidden()
+    assert bench.rig is not rig and bench.check is not None and bench.check is not c
+    assert not bench.check_box.isHidden() and len(bench.check.pairs) == len(c.pairs)
     bench.export_to(str(out), formats={"json"})
-    assert "check_with_other_images" not in (out / f"{bench.project.name}-r2-cameras.json").read_text()
+    name = bench.project.name
+    assert "check_with_other_images" in (out / f"{name}-r2-cameras.json").read_text()
+    win.open_path(str(out / f"{name}.plumbline"))
+    bench = win.bench
+    settle(bench)
+    assert bench.rig is not None and bench.check is not None and len(bench.project.check_detections[0]) == 3
+
+    # Other target settings, or another number of cameras: the kept images no longer apply.
+    bench._add_camera()
+    assert bench.project.check_detections == [] and bench.check is None
     QSettings().setValue("project_counter", 0)

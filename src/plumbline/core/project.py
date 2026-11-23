@@ -73,6 +73,11 @@ class Project:
     second_options: ModelOptions | None = None  # camera 2's own lens settings; None = the same as camera 1
 
     more_cameras: list[ExtraCamera] = field(default_factory=list)  # cameras 3, 4, ...; only with a second camera
+    # Two cameras: pairs of images kept out of the calibration, to check its result with. Two lists, one per camera.
+    check_detections: list[list[Detection]] = field(default_factory=list)
+
+    def drop_check(self) -> None:
+        self.check_detections = []
 
     @property
     def camera_count(self) -> int:
@@ -161,6 +166,8 @@ class Project:
                                   **({"options": self.second_options.to_dict()} if self.second_options else {})}}
                if self.second_camera else {}),
             **({"more_cameras": [c.to_dict() for c in self.more_cameras]} if self.second_camera and self.more_cameras else {}),
+            **({"check_detections": [[d.to_dict() for d in one] for one in self.check_detections]}
+               if self.check_detections else {}),
         }
 
     def save(self, path: str | None = None) -> None:
@@ -194,4 +201,5 @@ class Project:
             second_options=(ModelOptions.from_dict(data["second_camera"]["options"])
                             if (data.get("second_camera") or {}).get("options") else None),
             more_cameras=[ExtraCamera.from_dict(c) for c in data.get("more_cameras", [])] if "second_camera" in data else [],
+            check_detections=[[Detection.from_dict(d) for d in one] for one in data.get("check_detections", [])],
         )
