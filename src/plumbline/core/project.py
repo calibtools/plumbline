@@ -79,6 +79,7 @@ class Project:
     # One camera: boards of the same kind in every image, numbered on from the first (see core.boards).
     board_count: int = 1
     board_detections: list[list[Detection]] = field(default_factory=list)   # boards 2, 3, ...: one list per board
+    boards_fixed: bool = False      # the boards are fixed to each other and are solved as one object (see core.rigid)
 
     def per_board(self) -> list[list[Detection]]:
         """Every board's detections, board 1 first; boards not yet looked for are left out."""
@@ -177,7 +178,7 @@ class Project:
             **({"more_cameras": [c.to_dict() for c in self.more_cameras]} if self.second_camera and self.more_cameras else {}),
             **({"check_detections": [[d.to_dict() for d in one] for one in self.check_detections]}
                if self.check_detections else {}),
-            **({"board_count": self.board_count,
+            **({"board_count": self.board_count, "boards_fixed": self.boards_fixed,
                 "board_detections": [[d.to_dict() for d in one] for one in self.board_detections]}
                if self.board_count > 1 else {}),
         }
@@ -215,5 +216,6 @@ class Project:
             more_cameras=[ExtraCamera.from_dict(c) for c in data.get("more_cameras", [])] if "second_camera" in data else [],
             check_detections=[[Detection.from_dict(d) for d in one] for one in data.get("check_detections", [])],
             board_count=int(data.get("board_count", 1)),
+            boards_fixed=bool(data.get("boards_fixed", False)),
             board_detections=[[Detection.from_dict(d) for d in one] for one in data.get("board_detections", [])],
         )

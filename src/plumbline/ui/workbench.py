@@ -29,6 +29,7 @@ from ..core.points import trusted_suspects
 from ..core.export_xlsx import write_xlsx
 from ..core.findings import CHECK, NOTE, PASS, error_outside_fit, findings, group_findings, rig_findings
 from ..core.boards import MOST_BOARDS, NUMBERED, board_places, board_targets, excluded_views, image_fit, together
+from ..core.rigid import calibrate_fixed
 from ..core.check import CheckResult, check_pairs, check_sets
 from ..core.group import GroupResult, calibrate_group
 from ..core.pairing import MOST_CAMERAS, natural, split_by_camera
@@ -481,7 +482,7 @@ class Workbench(QWidget):
         self.boards.setToolTip(
             "Boards of the same kind that are in every image together, for example two boards set at an angle. "
             "Board 2 carries the marker numbers that follow board 1's. Each board in each image counts as a view "
-            "of its own; they need not be fixed to each other.")
+            "of its own, unless the boards are fixed to each other and the box below is ticked.")
         self.boards_label = label("Boards per image")
         self.dictionary = QComboBox()
         self.dictionary.addItems(DICTIONARIES)
@@ -505,6 +506,13 @@ class Workbench(QWidget):
         form.addRow(self.boards_label, self.boards)
         v.addLayout(form)
         v.addWidget(self.legacy)
+        self.boards_fixed = QCheckBox("Boards are fixed to each other")
+        self.boards_fixed.setToolTip(
+            "Tick this when the boards form one rigid object, for example two boards screwed to a bracket. "
+            "They are then solved as one object: one position per image, and one place for every further board. "
+            "That pins the camera down better. Leave it off when the boards may move against each other.")
+        self.boards_fixed.toggled.connect(self._boards_fixed_toggled)
+        v.addWidget(self.boards_fixed)
         self.target_hint = label("", "small", wrap=True)
         v.addWidget(self.target_hint)
         v.addStretch(1)
@@ -781,6 +789,9 @@ class Workbench(QWidget):
             self.legacy.setChecked(t.legacy_pattern)
             self.first_id.setValue(t.first_marker_id)
         self.boards.setValue(self.project.board_count if t.kind in NUMBERED else 1)
+        self.boards_fixed.blockSignals(True)
+        self.boards_fixed.setChecked(self.project.boards_fixed)
+        self.boards_fixed.blockSignals(False)
         self._last_kind = t.kind
         for wdg in fields:
             wdg.blockSignals(False)
@@ -879,6 +890,7 @@ class Workbench(QWidget):
         for wdg in (self.boards, self.boards_label):
             wdg.setVisible(tags)
         self.boards.setEnabled(not self.project.second_camera)
+        self.boards_fixed.setVisible(tags and self.boards.value() > 1 and not self.project.second_camera)
         for wdg in (self.marker, self.marker_label):
             wdg.setVisible(tags or circles)
         self.legacy.setVisible(charuco)
@@ -918,6 +930,7 @@ class Workbench(QWidget):
                 )
             self.table.setHorizontalHeaderLabels(["File", target.point_word.capitalize(), "Error, px"])
         count = self.boards.value() if target is not None and target.kind in NUMBERED and not self.project.second_camera else 1
+        self.boards_fixed.setVisible(count > 1)
         if target is not None and count > 1:
             try:
                 last = board_targets(target, count)[-1]
@@ -940,6 +953,13 @@ class Workbench(QWidget):
             self.result = None
             if had:
                 self._say("Target changed. Run detection again.")
+        self._refresh()
+
+    def _boards_fixed_toggled(self, on: bool) -> None:
+        self.project.boards_fixed = bool(on)
+        if self.result is not None:
+            self.result = None
+            self._say("Boards fixed to each other: " + ("on" if on else "off") + ". Calibrate again.")
         self._refresh()
 
     def _own_model_toggled(self, on: bool) -> None:
@@ -1276,6 +1296,8 @@ class Workbench(QWidget):
             self.tabs.setCurrentIndex(2)
             used = len({v.index % images for v in result.views})
             also = f" ({len(result.views)} views of {boards} boards)" if boards > 1 else ""
+            if result.fixed is not None:
+                also = f" ({boards} boards as one object)"
             self._say(f"Calibrated from {used} images{also}, RMS {result.rms_point:.3f} px." + self._left_out)
             self._left_out = ""
             self._refresh()
@@ -1283,6 +1305,10 @@ class Workbench(QWidget):
         if boards > 1:
             # Each board has a position of its own in every image; one shape for all of them makes no sense.
             options = replace(options, release_board=False)
+            if self.project.boards_fixed:
+                per = self._per_board()
+                self._start(lambda _p: calibrate_fixed(per, target, options, excluded), done, "Calibrating")
+                return
             flat, left_out = self._flat(), excluded_views(excluded, images, boards)
             self._start(lambda _p: calibrate(flat, target, options, left_out), done, "Calibrating")
             return
@@ -1368,12 +1394,20 @@ class Workbench(QWidget):
                 # Several boards per image: how the other boards sit to board 1 goes into the same file.
                 target_file = base / export_files(name, revision)["json"]
                 data = json.loads(target_file.read_text(encoding="utf-8"))
+                fixed = self.result.fixed
                 data["boards"] = {
                     "per_image": len(per),
-                    "note": "Each board in each image is a view of its own; views of boards after the first carry "
-                            "the board in their name. Places are from the images that show both boards; the "
-                            "spread is how much those images disagree.",
-                    "seen_from_board_1": [q.to_dict() for q in board_places(self.result, len(per[0]), len(per))],
+                    "fixed_to_each_other": fixed is not None,
+                    "note": ("The boards were solved as one object: one position per image and one place for every "
+                             "board after the first, with its standard deviation (angle_std_deg, place_std_mm). "
+                             "The spread is how much the images disagreed before, with every board on its own."
+                             if fixed is not None else
+                             "Each board in each image is a view of its own; views of boards after the first carry "
+                             "the board in their name. Places are from the images that show both boards; the "
+                             "spread is how much those images disagree."),
+                    "seen_from_board_1": [q.to_dict() for q in (fixed.places if fixed is not None else
+                                                                board_places(self.result, len(per[0]), len(per)))],
+                    **({"fit": fixed.to_dict()} if fixed is not None else {}),
                 }
                 target_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         project_file = export_files(name, revision)["project"]
@@ -2021,7 +2055,8 @@ class Workbench(QWidget):
         self._clear(g)
         for c, head in enumerate(("", "Angle, °", "Apart, mm")):
             g.addWidget(label(head, "small"), 0, c, Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
-        places = board_places(r, len(per[0]), len(per)) if r is not None else []
+        fixed = r.fixed if r is not None else None
+        places = fixed.places if fixed is not None else board_places(r, len(per[0]), len(per)) if r is not None else []
         moving = False
         for b in range(1, len(per)):
             place = places[b - 1] if places and places[b - 1].images else None
@@ -2030,6 +2065,9 @@ class Workbench(QWidget):
                      f"{place.angle_deg:.2f}" if place else "–",
                      f"{place.apart_mm:.1f} ± {place.place_spread_mm:.1f}" if place and place.images > 1 else
                      f"{place.apart_mm:.1f}" if place else "–")
+            if fixed is not None and place and place.angle_std_deg == place.angle_std_deg:
+                cells = (cells[0], f"{place.angle_deg:.2f} ± {place.angle_std_deg:.2f}",
+                         f"{place.apart_mm:.1f} ± {place.place_std_mm:.2f}")
             for c, text in enumerate(cells):
                 g.addWidget(label(text, font=T.mono(13, 600 if c else 400), color=T.INK if c else T.INK_MUTED), b, c,
                             Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
@@ -2039,6 +2077,13 @@ class Workbench(QWidget):
         if moving:
             note = ("The images disagree about how the boards sit to each other: they moved between images, or a "
                     "pose is poor. The camera result does not rely on them being fixed. " + note.split(". ", 2)[1] + ".")
+        elif fixed is None and r is not None:
+            note += " If they are fixed, tick \"Boards are fixed to each other\" on the Target tab: that pins the camera down better."
+        if fixed is not None:
+            note = ("The boards are solved as one object. ± is the uncertainty of each board's place on it." if not fixed.loose else
+                    f"The images do not fit one rigid object: {fixed.rms_fixed:.2f} px with the boards fixed, "
+                    f"{fixed.rms_free:.2f} px with every board on its own. Untick \"Boards are fixed to each other\" "
+                    "on the Target tab.")
         self.boards_note.setText(note if r is not None else "How the other boards sit to board 1 shows here after calibration.")
 
     def _fill_rig(self) -> None:

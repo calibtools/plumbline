@@ -38,6 +38,9 @@ def findings(result: CalibrationResult, coverage_share: float) -> list[tuple[str
     steered = far_points(r, already=set(flagged))
     if steered:
         out.append((CHECK, steered))
+    loose = loose_boards(r)
+    if loose:
+        out.append((CHECK, loose))
     if coverage_share < 0.7:
         out.append((CHECK, f"{word} cover {coverage_share * 100:.0f} % of the image. "
                            "Add views that reach the empty cells in the coverage map."))
@@ -158,6 +161,17 @@ def model_sentence(result: CalibrationResult) -> str:
     if o.thin_prism:
         parts.append("thin prism terms s1 to s4")
     return ", ".join(parts) + "."
+
+
+def loose_boards(result: CalibrationResult) -> str | None:
+    """A sentence when the boards were solved as one object and the images say they are not one, or None."""
+    fixed = getattr(result, "fixed", None)
+    if fixed is None or not fixed.loose:
+        return None
+    return (f"With the boards taken as fixed to each other the error is {fixed.rms_fixed:.2f} px; with every board on its own "
+            f"it is {fixed.rms_free:.2f} px. The boards probably moved against each other between images. Untick "
+            "\"Boards are fixed to each other\" on the Target tab and calibrate again, or leave out the images taken "
+            "after they moved.")
 
 
 def far_points(result: CalibrationResult, already: set[int] | None = None) -> str | None:
